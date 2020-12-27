@@ -1122,9 +1122,9 @@ public:
 	{
 		SetupOcclusion(InComponent);
 
-		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		SortedInstancesPtr = &InComponent->SortedInstances;
-		//@StarLight code - END GPU-Driven, Added by yanjianhong
+		////@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+		//SortedInstancesPtr = &InComponent->SortedInstances;
+		////@StarLight code - END GPU-Driven, Added by yanjianhong
 	}
 
 	void SetupOcclusion(UHierarchicalInstancedStaticMeshComponent* InComponent)

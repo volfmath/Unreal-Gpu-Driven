@@ -45,6 +45,10 @@
 #include "UObject/EditorObjectVersion.h"
 #include "UObject/RenderingObjectVersion.h"
 
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+#include "MobileGPUDriven.h"
+//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 
 IMPLEMENT_TYPE_LAYOUT(FInstancedStaticMeshVertexFactoryShaderParameters);
 
@@ -94,7 +98,7 @@ static TAutoConsoleVariable<float> CVarRayTracingInstancesLowScaleCullRadius(
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
 	TEXT("r.Mobile.GpuDriven"),
-	1,
+	0,
 	TEXT("Whether to allow gpudriven.\n"),
 	ECVF_Scalability
 );
@@ -1027,69 +1031,37 @@ void FInstancedStaticMeshSceneProxy::SetupProxy(UInstancedStaticMeshComponent* I
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 void FInstancedStaticMeshSceneProxy::CreateRenderThreadResources() {
 	FStaticMeshSceneProxy::CreateRenderThreadResources();
-
-	if (CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0) {
-		//#TODO: Register to GPUDriven System
-		//Don't consider bUsePreculledIndices
-		//check(StaticMesh != nullptr);
-		//const uint32 Lods = InstancedRenderData.VertexFactories.Num();
-		//check(StaticMesh->GetNumLODs() == Lods);
-		//uint32 NumDrawElement = 0u;
-		//for (uint32 lodindex = 0; lodindex < Lods; ++lodindex) {
-		//	const FStaticMeshLODResources& LODModel = RenderData->LODResources[lodindex];
-		//	check(LODModel.Sections.Num() == 1);
-		//	NumDrawElement += LODModel.Sections.Num();
-		//}
-
-		//TArray<SLGPUDrivenParameter::DrawIndirectCommandArgs> DrawCommandBuffer_CPU;
-		//DrawCommandBuffer_CPU.Reserve(NumDrawElement);
-		//StaticInstanceIndirectBuffer_GPU.Initialize(sizeof(uint32), NumDrawElement * SLGPUDrivenParameter::IndirectBufferElementSize, PF_R32_UINT, BUF_DrawIndirect | BUF_Static);
-
-		////原生Instance直接硬Draw,即每级LOD都是一样的Instance数量
-		//for (uint32 LodIndex = 0; LodIndex < Lods; ++LodIndex) {
-		//	const FStaticMeshLODResources& LODModel = RenderData->LODResources[LodIndex];
-		//	for (uint32 SectionIndex = 0; SectionIndex < static_cast<uint32>(LODModel.Sections.Num()); ++SectionIndex) {
-		//		const FStaticMeshSection& Section = LODModel.Sections[SectionIndex];
-		//		//DrawIndirectCommandArgs IndirectArgs;
-		//		//IndirectArgs.IndexCount = LODModel.IndexBuffer.GetNumIndices();
-		//		//IndirectArgs.InstanceCount = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
-		//		//IndirectArgs.FirstIndex = Section.FirstIndex;
-		//		//IndirectArgs.VertexOffset = 0u;
-		//		//IndirectArgs.FirstInstance = 0u;
-		//		DrawCommandBuffer_CPU.Emplace(
-		//			LODModel.IndexBuffer.GetNumIndices(), 
-		//			InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances(),
-		//			Section.FirstIndex,
-		//			0u,
-		//			0u
-		//		);
-		//	}
-		//}
-		//void* DrawCommandBuffer_GPU = RHILockVertexBuffer(StaticInstanceIndirectBuffer_GPU.Buffer, 0, StaticInstanceIndirectBuffer_GPU.NumBytes, RLM_WriteOnly);
-		//FMemory::Memcpy(DrawCommandBuffer_GPU, DrawCommandBuffer_CPU.GetData(), DrawCommandBuffer_CPU.Num() * SLGPUDrivenParameter::IndirectCommandSize);
-		//RHIUnlockVertexBuffer(StaticInstanceIndirectBuffer_GPU.Buffer);
+	if (bIsUseGPUDriven) {
+		FMobileGPUDrivenSystem::RegisterEntity(ComponentWorldPtr, this);
 	}
 }
 
-void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 ElementIndex, FMeshBatch& OutMeshBatch) const{
+void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const{
 	//uint32 IndirectArgsOffset = 0;
-	//for (uint32 lodindex = 0; lodindex < static_cast<uint32>(LODIndex); ++lodindex) {
-	//	const FStaticMeshLODResources& LODModel = RenderData->LODResources[lodindex];
+	//for (uint32 i = 0; i < static_cast<uint32>(LODIndex); ++i) {
+	//	const FStaticMeshLODResources& LODModel = RenderData->LODResources[i];
 	//	IndirectArgsOffset += LODModel.Sections.Num() * SLGPUDrivenParameter::IndirectCommandSize;
 	//}
-	//IndirectArgsOffset += ElementIndex * SLGPUDrivenParameter::IndirectCommandSize;
+	//IndirectArgsOffset += SectionIndex * SLGPUDrivenParameter::IndirectCommandSize;
 
 	//FMeshBatchElement& BatchElement0 = OutMeshBatch.Elements[0];
 	//BatchElement0.NumPrimitives = 0;
 	//BatchElement0.IndirectArgsBuffer = StaticInstanceIndirectBuffer_GPU.Buffer;
 	//BatchElement0.IndirectArgsOffset = IndirectArgsOffset;
 }
+
+void FInstancedStaticMeshSceneProxy::SetupGPUDrivenData(UWorld* World) {
+	bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World);
+	ComponentWorldPtr = World;
+}
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 void FInstancedStaticMeshSceneProxy::DestroyRenderThreadResources()
 {
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	//StaticInstanceIndirectBuffer_GPU.Release();
+	if (bIsUseGPUDriven) {
+		FMobileGPUDrivenSystem::UnRegisterEntity(ComponentWorldPtr, this);
+	}
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	InstancedRenderData.ReleaseResources(&GetScene(), StaticMesh);
@@ -1138,7 +1110,7 @@ bool FInstancedStaticMeshSceneProxy::GetMeshElement(int32 LODIndex, int32 BatchI
 		SetupInstancedMeshBatch(LODIndex, BatchIndex, OutMeshBatch);
 
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		if (CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0) {
+		if (bIsUseGPUDriven) {
 			SetupIndirectDrawMeshBatch(LODIndex, ElementIndex, OutMeshBatch);
 		}
 		//@StarLight code - END GPU-Driven, Added by yanjianhong

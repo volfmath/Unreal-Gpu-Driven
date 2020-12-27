@@ -4,12 +4,6 @@
 class FInstancedStaticMeshSceneProxy;
 class UStaticMesh;
 
-namespace SLGPUDrivenParameter {
-	constexpr uint32 IndirectCommandSize = sizeof(FDrawIndirectCommandArgs_CPU);
-	constexpr uint32 IndirectBufferElementSize = 0x5;
-	constexpr uint32 MaxStaticMeshLods = 0x8;
-};
-
 struct FDrawIndirectCommandArgs_CPU {
 	uint32    IndexCount;
 	uint32    InstanceCount;
@@ -27,12 +21,18 @@ struct FClusterMappingAndBound_CPU {
 };
 
 struct FLodBuffer_CPU {
-	TArray<float> LodScreenSizeBuffer;
+	float CurLodScreenSize;
 };
 
-struct FClusterEntity {
-	FClusterEntity(FInstancedStaticMeshSceneProxy* InInstanceSceneProxy);
-	~FClusterEntity() {}
+namespace SLGPUDrivenParameter {
+	constexpr SIZE_T IndirectCommandSize = sizeof(FDrawIndirectCommandArgs_CPU);
+	constexpr SIZE_T IndirectBufferElementSize = 0x5;
+	constexpr SIZE_T MaxStaticMeshLods = 0x8;
+};
+
+struct FMeshEntity {
+	FMeshEntity(FInstancedStaticMeshSceneProxy* InInstanceSceneProxy);
+	~FMeshEntity() {}
 
 	UStaticMesh* GetStaticMesh() const;
 	FBoxSphereBounds GetClusterBounds(int32 ClusterRenderIndex) const;
@@ -41,9 +41,10 @@ struct FClusterEntity {
 	uint32 NumLod;
 	uint32 NumRenderCluster;
 	uint32 NumDrawElement;
+	//uint32 
 	FInstancedStaticMeshSceneProxy* InstanceSceneProxy;
 
-	TArray<uint32> NumSectionPerLod;
+	TArray<uint32> NumSectionPerLod; //Mesh每级Lod的Section数量
 	TArray<uint32> SectionIndexCount;
 	TArray<uint32> SectionFirstIndex;
 	TArray<float> ScreenLODs;
@@ -58,11 +59,12 @@ struct FMobileGPUDrivenSystem {
 	static TMap<UWorld*, FMobileGPUDrivenSystem*> GlobalGPUDrivenSystemMap;
 	static void RegisterEntity(UWorld* World, FInstancedStaticMeshSceneProxy* InstanceSceneProxy);
 	static void UnRegisterEntity(UWorld* World, FInstancedStaticMeshSceneProxy* InstanceSceneProxy);
-	static inline bool IsGPUDrivenWorld(UWorld* World);
+	static int32 GetIndirectDrawStartIndex(UWorld* World, int32 EntityIndex);
+	static bool IsGPUDrivenWorld(UWorld* World);
 	
 	//[Resources AutoRelease]
 	bool bGPUDataDirty;
-	TArray<FClusterEntity> Entities;
+	TArray<FMeshEntity> Entities;
 
 	//[Resources Manager]
 	FRWBuffer IndirectDrawCommandBuffer_GPU;
