@@ -98,7 +98,7 @@ static TAutoConsoleVariable<float> CVarRayTracingInstancesLowScaleCullRadius(
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
 	TEXT("r.Mobile.GpuDriven"),
-	0,
+	1,
 	TEXT("Whether to allow gpudriven.\n"),
 	ECVF_Scalability
 );
@@ -1029,41 +1029,41 @@ void FInstancedStaticMeshSceneProxy::SetupProxy(UInstancedStaticMeshComponent* I
 }
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-void FInstancedStaticMeshSceneProxy::CreateRenderThreadResources() {
-	FStaticMeshSceneProxy::CreateRenderThreadResources();
-	if (bIsUseGPUDriven) {
-		FMobileGPUDrivenSystem::RegisterEntity(ComponentWorldPtr, this);
+//void FInstancedStaticMeshSceneProxy::CreateRenderThreadResources() {
+//	FStaticMeshSceneProxy::CreateRenderThreadResources();
+//}
+
+void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const{
+
+	//检查VT, 检查光栅模式
+	check(OutMeshBatch.Type == PT_TriangleList && RuntimeVirtualTextureMaterialTypes.Num() == 0);
+
+	auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
+	if (CurrentSystem) {
+		IndirectDrawArgsAndStartIndex IndirectBufferParameters;
+		CurrentSystem->GetIndirectDrawArgsAndStartIndex(UniqueObjectId, IndirectBufferParameters);
+		uint32 IndirectArgsOffset = 0;
+		for (uint32 i = 0; i < static_cast<uint32>(LODIndex); ++i) {
+			const FStaticMeshLODResources& LODModel = RenderData->LODResources[i];
+			IndirectArgsOffset += LODModel.Sections.Num() * SLGPUDrivenParameter::IndirectCommandSize;
+		}
+		IndirectArgsOffset += SectionIndex * SLGPUDrivenParameter::IndirectCommandSize;
+
+		FMeshBatchElement& BatchElement0 = OutMeshBatch.Elements[0];
+		BatchElement0.NumPrimitives = 0;
+		BatchElement0.IndirectArgsBuffer = IndirectBufferParameters.IndirectArgsBuffer;
+		BatchElement0.IndirectArgsOffset = IndirectBufferParameters.IndirectArgsStartIndex + IndirectArgsOffset;
 	}
 }
 
-void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const{
-	//uint32 IndirectArgsOffset = 0;
-	//for (uint32 i = 0; i < static_cast<uint32>(LODIndex); ++i) {
-	//	const FStaticMeshLODResources& LODModel = RenderData->LODResources[i];
-	//	IndirectArgsOffset += LODModel.Sections.Num() * SLGPUDrivenParameter::IndirectCommandSize;
-	//}
-	//IndirectArgsOffset += SectionIndex * SLGPUDrivenParameter::IndirectCommandSize;
-
-	//FMeshBatchElement& BatchElement0 = OutMeshBatch.Elements[0];
-	//BatchElement0.NumPrimitives = 0;
-	//BatchElement0.IndirectArgsBuffer = StaticInstanceIndirectBuffer_GPU.Buffer;
-	//BatchElement0.IndirectArgsOffset = IndirectArgsOffset;
-}
-
-void FInstancedStaticMeshSceneProxy::SetupGPUDrivenData(UWorld* World) {
-	bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World);
-	ComponentWorldPtr = World;
+void FInstancedStaticMeshSceneProxy::SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent) {
+	UniqueObjectId = InComponent->GetUniqueID();
+	bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0;
 }
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 void FInstancedStaticMeshSceneProxy::DestroyRenderThreadResources()
 {
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	if (bIsUseGPUDriven) {
-		FMobileGPUDrivenSystem::UnRegisterEntity(ComponentWorldPtr, this);
-	}
-	//@StarLight code - END GPU-Driven, Added by yanjianhong
-
 	InstancedRenderData.ReleaseResources(&GetScene(), StaticMesh);
 	FStaticMeshSceneProxy::DestroyRenderThreadResources();
 }
@@ -1413,6 +1413,10 @@ UInstancedStaticMeshComponent::UInstancedStaticMeshComponent(const FObjectInitia
 	BodyInstance.bSimulatePhysics = false;
 
 	bDisallowMeshPaintPerInstance = true;
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	EntityIndex = INDEX_NONE;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
 UInstancedStaticMeshComponent::UInstancedStaticMeshComponent(FVTableHelper& Helper)
@@ -2011,6 +2015,20 @@ void UInstancedStaticMeshComponent::ReleasePerInstanceRenderData()
 {
 	if (PerInstanceRenderData.IsValid())
 	{
+		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+		//与PerInstanceRenderData生命周期相同,不会重复释放
+		const bool bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0;
+		if (bIsUseGPUDriven) {			
+			uint32 UniqueObjectId = GetUniqueID();
+			auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId);
+			if (CurrentSystem) {
+				FMobileGPUDrivenSystem::UnRegisterEntity(UniqueObjectId);
+				CurrentSystem->MarkAllComponentsDirty();
+			}
+		}
+		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+
+
 		typedef TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> FPerInstanceRenderDataPtr;
 
 		PerInstanceRenderData->HitProxies.Empty();
@@ -2874,6 +2892,21 @@ void UInstancedStaticMeshComponent::InitPerInstanceRenderData(bool InitializeFro
 		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(InstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess));
 		PerInstanceRenderData->HitProxies = MoveTemp(HitProxies);
 	}
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	//World会修改FeatureLevel,
+	const bool bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World) /*&& World->FeatureLevel == ERHIFeatureLevel::Type::ES3_1*/;
+	if (bIsUseGPUDriven) {
+
+		//标记后再更新
+		uint32 UniqueObjectId = GetUniqueID();
+		if (auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId)) {
+			CurrentSystem->MarkAllComponentsDirty();
+		}
+		FMobileGPUDrivenSystem::RegisterEntity(this);
+		
+	}
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 }
 
 void UInstancedStaticMeshComponent::OnComponentCreated()

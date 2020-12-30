@@ -465,7 +465,7 @@ public:
 		SetupRayTracingCullClusters();
 #endif
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		SetupGPUDrivenData(InComponent->GetWorld());
+		SetupGPUDrivenData(InComponent);
 		//@StarLight code - END GPU-Driven, Added by yanjianhong
 	}
 
@@ -482,11 +482,8 @@ public:
 	// FPrimitiveSceneProxy interface.
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	virtual void CreateRenderThreadResources() override;
-	void SetupGPUDrivenData(UWorld* World);
+	void SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent);
 	void SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const;
-	inline void SetEntityIndex(uint32 InEntityIndex) { EntityIndex = InEntityIndex; }
-	inline uint32 GetEntityIndex() const { return EntityIndex;  }
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 
 	virtual void DestroyRenderThreadResources() override;
@@ -559,9 +556,7 @@ protected:
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	friend struct FMeshEntity;
 	bool bIsUseGPUDriven;
-	uint32 EntityIndex;
-	UWorld* ComponentWorldPtr;
-	//TArray<int32>* SortedInstancesPtr;//used for HISM
+	uint32 UniqueObjectId;
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	/** Cache of the StaticMesh asset, needed to release SpeedTree resources*/
