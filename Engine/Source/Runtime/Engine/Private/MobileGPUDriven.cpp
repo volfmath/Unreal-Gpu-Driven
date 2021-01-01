@@ -30,6 +30,9 @@ void FMobileGPUDrivenSystem::RegisterEntity(UInstancedStaticMeshComponent* Insta
 			FMobileGPUDrivenSystem::RegisterEntity_RenderThread(MoveTemp(const_cast<FMeshEntity&>(RightValueMeshEntity)), FoundSystem);
 		}
 	);
+
+	//MarkDirty
+	FoundSystem->MarkAllComponentsDirty();
 }
 
 //Return the index of the removed element
@@ -55,6 +58,9 @@ void FMobileGPUDrivenSystem::UnRegisterEntity(uint32 UniqueObjectIndex) {
 			FMobileGPUDrivenSystem::UnRegisterEntity_RenderThread(UniqueObjectIndex);
 		}
 	);
+
+	//MarkDirty
+	FoundSystem->MarkAllComponentsDirty();
 }
 
 void FMobileGPUDrivenSystem::RegisterEntity_RenderThread(FMeshEntity&& MeshEntity, FMobileGPUDrivenSystem* SceneSystemPtr)
@@ -361,6 +367,8 @@ void FMobileGPUDrivenSystem::UpdateIndirectDrawCommandBuffer() {
 	RHIUnlockVertexBuffer(IndirectDrawCommandBuffer_GPU.Buffer);
 }
 
+
+//#TODO: GPU Driven统一走Dynamic收集MeshDrawCommand, 可移除
 void FMobileGPUDrivenSystem::MarkAllComponentsDirty(){
 	check(IsInGameThread());
 
@@ -376,7 +384,7 @@ void FMobileGPUDrivenSystem::MarkAllComponentsDirty(){
 
 
 void FMobileGPUDrivenSystem::GetIndirectDrawArgsAndStartIndex(uint32 UniqueObjectId, IndirectDrawArgsAndStartIndex& IndirectBuffer) const{
-
+	//#TODO: Cache IndirectArgsStartIndex
 	const uint32 EntityIndex_RenderThread = ComponentToIndexMap_RenderThread.FindChecked(UniqueObjectId);
 
 	uint32 DrawStartIndex = 0;

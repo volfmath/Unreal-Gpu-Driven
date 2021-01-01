@@ -67,11 +67,6 @@ struct FMeshEntity {
 	/*TArray<FClusterNode> ClusterNodes*/ //Cluster½á¹¹
 };
 
-struct IndirectDrawArgsAndStartIndex {
-	uint32 IndirectArgsStartIndex;
-	FVertexBufferRHIRef IndirectArgsBuffer;
-};
-
 struct FMeshEntityGameThread {
 	FMeshEntityGameThread(uint32 InUniqueObjectId, UInstancedStaticMeshComponent* InEntityComponent);
 	~FMeshEntityGameThread() {}
@@ -80,27 +75,29 @@ struct FMeshEntityGameThread {
 	TWeakObjectPtr<UInstancedStaticMeshComponent> EntityComponent;
 };
 
+struct IndirectDrawArgsAndStartIndex {
+	uint32 IndirectArgsStartIndex;
+	FVertexBufferRHIRef IndirectArgsBuffer;
+};
+
 struct FMobileGPUDrivenSystem {
 	FMobileGPUDrivenSystem();
 	~FMobileGPUDrivenSystem();
 	void UpdateGlobalGPUBuffer();
 
-
-	void UpdateIndirectDrawCommandBuffer();
-	void MarkAllComponentsDirty();
+	//[Public Call Function]
 	void GetIndirectDrawArgsAndStartIndex(uint32 EntityIndex, IndirectDrawArgsAndStartIndex& IndirectBuffer) const;
-
-
 	static void RegisterEntity(UInstancedStaticMeshComponent* InstanceComponent);
 	static void UnRegisterEntity(uint32 UniqueObjectIndex);
-
 	static void RegisterEntity_RenderThread(FMeshEntity&& MeshEntity, FMobileGPUDrivenSystem* SceneSystemPtr);
 	static void UnRegisterEntity_RenderThread(uint32 UniqueObjectIndex);
-
-	
 	static bool IsGPUDrivenWorld(UWorld* World);
 	static FMobileGPUDrivenSystem* GetGPUDrivenSystem_GameThread(uint32 UniqueObjectIndex);
 	static FMobileGPUDrivenSystem* GetGPUDrivenSystem_RenderThreadOrTask(uint32 UniqueObjectIndex);
+
+	//[Inner Call Function]
+	void MarkAllComponentsDirty();
+	void UpdateIndirectDrawCommandBuffer();
 
 	//[Thread Shared]
 	static TMap<uint32, FMobileGPUDrivenSystem*> GlobalWorldIndexToSystemMap;

@@ -501,6 +501,12 @@ public:
 				Result.bDynamicRelevance = true;
 			}
 #endif
+			//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+			if (bIsUseGPUDriven && (View->GetDynamicMeshElementsShadowCullFrustum() == nullptr)) {
+				Result.bStaticRelevance = false;
+				Result.bDynamicRelevance = true;
+			}
+			//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 		}
 		return Result;
 	}

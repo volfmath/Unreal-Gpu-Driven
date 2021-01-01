@@ -890,72 +890,105 @@ SIZE_T FInstancedStaticMeshSceneProxy::GetTypeHash() const
 void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const
 {
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_InstancedStaticMeshSceneProxy_GetMeshElements);
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	if (bIsUseGPUDriven && !bHasSelectedInstances) { //not support selected
+		check(RuntimeVirtualTextureMaterialTypes.Num() == 0); //not support vt
+		check(Views.Num() == 1);
+	
+		const FSceneView* View = Views[0];
+		const int32 NumLod = StaticMesh->RenderData->LODResources.Num();
+		check(View->GetDynamicMeshElementsShadowCullFrustum() == nullptr);
 
+		for (int32 LODIndex = 0; LODIndex < NumLod; ++LODIndex) {
+			const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
+			for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++){
+				//Only one MeshBatch, one MeshBatchElement
+				FMeshBatch& MeshElement = Collector.AllocateMesh();
+				if (GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, false, MeshElement)){
+
+					MeshElement.Elements[0].UserData = &UserData_AllInstances; //#TODO: 重写VertexFactory
+					MeshElement.Elements[0].bUserDataIsColorVertexBuffer = false;
+					MeshElement.bCanApplyViewModeOverrides = true;
+					MeshElement.bUseSelectionOutline = false;
+					MeshElement.bUseWireframeSelectionColoring = false;
+
+					const bool bIsShadowView = false;
+					if (!bIsShadowView) {
+						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement);
+					}
+					Collector.AddMesh(0, MeshElement);
+				}
+			}
+		}
+	}
+	else {
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-	const bool bSelectionRenderEnabled = GIsEditor && ViewFamily.EngineShowFlags.Selection;
+		const bool bSelectionRenderEnabled = GIsEditor && ViewFamily.EngineShowFlags.Selection;
 
-	// If the first pass rendered selected instances only, we need to render the deselected instances in a second pass
-	const int32 NumSelectionGroups = (bSelectionRenderEnabled && bHasSelectedInstances) ? 2 : 1;
+		// If the first pass rendered selected instances only, we need to render the deselected instances in a second pass
+		const int32 NumSelectionGroups = (bSelectionRenderEnabled && bHasSelectedInstances) ? 2 : 1;
 
-	const FInstancingUserData* PassUserData[2] =
-	{
-		bHasSelectedInstances && bSelectionRenderEnabled ? &UserData_SelectedInstances : &UserData_AllInstances,
-		&UserData_DeselectedInstances
-	};
-
-	bool BatchRenderSelection[2] = 
-	{
-		bSelectionRenderEnabled && IsSelected(),
-		false
-	};
-
-	const bool bIsWireframe = ViewFamily.EngineShowFlags.Wireframe;
-
-	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
-	{
-		if (VisibilityMap & (1 << ViewIndex))
+		const FInstancingUserData* PassUserData[2] =
 		{
-			const FSceneView* View = Views[ViewIndex];
+			bHasSelectedInstances && bSelectionRenderEnabled ? &UserData_SelectedInstances : &UserData_AllInstances,
+			&UserData_DeselectedInstances
+		};
 
-			for (int32 SelectionGroupIndex = 0; SelectionGroupIndex < NumSelectionGroups; SelectionGroupIndex++)
+		bool BatchRenderSelection[2] =
+		{
+			bSelectionRenderEnabled && IsSelected(),
+			false
+		};
+
+		const bool bIsWireframe = ViewFamily.EngineShowFlags.Wireframe;
+
+		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
+		{
+			if (VisibilityMap & (1 << ViewIndex))
 			{
-				const int32 LODIndex = GetLOD(View);
-				const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
+				const FSceneView* View = Views[ViewIndex];
 
-				for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++)
+				for (int32 SelectionGroupIndex = 0; SelectionGroupIndex < NumSelectionGroups; SelectionGroupIndex++)
 				{
-					const int32 NumBatches = GetNumMeshBatches();
+					const int32 LODIndex = GetLOD(View);
+					const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
 
-					for (int32 BatchIndex = 0; BatchIndex < NumBatches; BatchIndex++)
+					for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++)
 					{
-						FMeshBatch& MeshElement = Collector.AllocateMesh();
+						const int32 NumBatches = GetNumMeshBatches();
 
-						if (GetMeshElement(LODIndex, BatchIndex, SectionIndex, GetDepthPriorityGroup(View), BatchRenderSelection[SelectionGroupIndex], true, MeshElement))
+						for (int32 BatchIndex = 0; BatchIndex < NumBatches; BatchIndex++)
 						{
-							//@todo-rco this is only supporting selection on the first element
-							MeshElement.Elements[0].UserData = PassUserData[SelectionGroupIndex];
-							MeshElement.Elements[0].bUserDataIsColorVertexBuffer = false;
-							MeshElement.bCanApplyViewModeOverrides = true;
-							MeshElement.bUseSelectionOutline = BatchRenderSelection[SelectionGroupIndex];
-							MeshElement.bUseWireframeSelectionColoring = BatchRenderSelection[SelectionGroupIndex];
+							FMeshBatch& MeshElement = Collector.AllocateMesh();
 
-							if (View->bRenderFirstInstanceOnly)
+							if (GetMeshElement(LODIndex, BatchIndex, SectionIndex, GetDepthPriorityGroup(View), BatchRenderSelection[SelectionGroupIndex], true, MeshElement))
 							{
-								for (int32 ElementIndex = 0; ElementIndex < MeshElement.Elements.Num(); ElementIndex++)
-								{
-									MeshElement.Elements[ElementIndex].NumInstances = FMath::Min<uint32>(MeshElement.Elements[ElementIndex].NumInstances, 1);
-								}
-							}
+								//@todo-rco this is only supporting selection on the first element
+								MeshElement.Elements[0].UserData = PassUserData[SelectionGroupIndex];
+								MeshElement.Elements[0].bUserDataIsColorVertexBuffer = false;
+								MeshElement.bCanApplyViewModeOverrides = true;
+								MeshElement.bUseSelectionOutline = BatchRenderSelection[SelectionGroupIndex];
+								MeshElement.bUseWireframeSelectionColoring = BatchRenderSelection[SelectionGroupIndex];
 
-							Collector.AddMesh(ViewIndex, MeshElement);
-							INC_DWORD_STAT_BY(STAT_StaticMeshTriangles, MeshElement.GetNumPrimitives());
+								if (View->bRenderFirstInstanceOnly)
+								{
+									for (int32 ElementIndex = 0; ElementIndex < MeshElement.Elements.Num(); ElementIndex++)
+									{
+										MeshElement.Elements[ElementIndex].NumInstances = FMath::Min<uint32>(MeshElement.Elements[ElementIndex].NumInstances, 1);
+									}
+								}
+
+								Collector.AddMesh(ViewIndex, MeshElement);
+								INC_DWORD_STAT_BY(STAT_StaticMeshTriangles, MeshElement.GetNumPrimitives());
+							}
 						}
 					}
 				}
 			}
 		}
-	}
 #endif
+	}
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
 int32 FInstancedStaticMeshSceneProxy::CollectOccluderElements(FOccluderElementsCollector& Collector) const
@@ -1029,14 +1062,8 @@ void FInstancedStaticMeshSceneProxy::SetupProxy(UInstancedStaticMeshComponent* I
 }
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-//void FInstancedStaticMeshSceneProxy::CreateRenderThreadResources() {
-//	FStaticMeshSceneProxy::CreateRenderThreadResources();
-//}
 
 void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const{
-
-	//检查VT, 检查光栅模式
-	check(OutMeshBatch.Type == PT_TriangleList && RuntimeVirtualTextureMaterialTypes.Num() == 0);
 
 	auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
 	if (CurrentSystem) {
@@ -1058,7 +1085,23 @@ void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, 
 
 void FInstancedStaticMeshSceneProxy::SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent) {
 	UniqueObjectId = InComponent->GetUniqueID();
-	bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0;
+
+	auto SupportsDitheredLODTransitions = [InComponent]() -> bool
+	{
+		TArray<class UMaterialInterface*> Materials = InComponent->GetMaterials();
+		for (UMaterialInterface* Material : Materials){
+			if (Material && !Material->IsDitheredLODTransition()){
+				return false;
+			}
+		}
+		return true;
+	};
+
+	//#TODO: 手动带入标记, 只有标记的ISM才会进行GPU-Driven流程
+	bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0
+		/* && InComponent->EnableGPUDriven*/
+		&& RuntimeVirtualTextureMaterialTypes.Num() == 0
+		&& !SupportsDitheredLODTransitions();
 }
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -1108,13 +1151,6 @@ bool FInstancedStaticMeshSceneProxy::GetMeshElement(int32 LODIndex, int32 BatchI
 	if (LODIndex < InstancedRenderData.VertexFactories.Num() && FStaticMeshSceneProxy::GetMeshElement(LODIndex, BatchIndex, ElementIndex, InDepthPriorityGroup, bUseSelectionOutline, bAllowPreCulledIndices, OutMeshBatch))
 	{
 		SetupInstancedMeshBatch(LODIndex, BatchIndex, OutMeshBatch);
-
-		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		if (bIsUseGPUDriven) {
-			SetupIndirectDrawMeshBatch(LODIndex, ElementIndex, OutMeshBatch);
-		}
-		//@StarLight code - END GPU-Driven, Added by yanjianhong
-
 		return true;
 	}
 	return false;
@@ -1413,10 +1449,6 @@ UInstancedStaticMeshComponent::UInstancedStaticMeshComponent(const FObjectInitia
 	BodyInstance.bSimulatePhysics = false;
 
 	bDisallowMeshPaintPerInstance = true;
-
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	EntityIndex = INDEX_NONE;
-	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
 UInstancedStaticMeshComponent::UInstancedStaticMeshComponent(FVTableHelper& Helper)
@@ -2018,12 +2050,12 @@ void UInstancedStaticMeshComponent::ReleasePerInstanceRenderData()
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 		//与PerInstanceRenderData生命周期相同,不会重复释放
 		const bool bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0;
-		if (bIsUseGPUDriven) {			
+		if (bIsUseGPUDriven) {		
+			//先查询是否注册
 			uint32 UniqueObjectId = GetUniqueID();
 			auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId);
 			if (CurrentSystem) {
 				FMobileGPUDrivenSystem::UnRegisterEntity(UniqueObjectId);
-				CurrentSystem->MarkAllComponentsDirty();
 			}
 		}
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
@@ -2894,17 +2926,10 @@ void UInstancedStaticMeshComponent::InitPerInstanceRenderData(bool InitializeFro
 	}
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	//World会修改FeatureLevel,
 	const bool bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World) /*&& World->FeatureLevel == ERHIFeatureLevel::Type::ES3_1*/;
 	if (bIsUseGPUDriven) {
-
-		//标记后再更新
-		uint32 UniqueObjectId = GetUniqueID();
-		if (auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId)) {
-			CurrentSystem->MarkAllComponentsDirty();
-		}
+		//Just register
 		FMobileGPUDrivenSystem::RegisterEntity(this);
-		
 	}
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 }
