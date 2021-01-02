@@ -465,7 +465,9 @@ public:
 		SetupRayTracingCullClusters();
 #endif
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		SetupGPUDrivenData(InComponent);
+		if (InFeatureLevel == ERHIFeatureLevel::Type::ES3_1) {
+			SetupGPUDrivenData(InComponent);
+		}
 		//@StarLight code - END GPU-Driven, Added by yanjianhong
 	}
 
@@ -502,7 +504,7 @@ public:
 			}
 #endif
 			//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-			if (bIsUseGPUDriven && (View->GetDynamicMeshElementsShadowCullFrustum() == nullptr)) {
+			if (bIsUseGPUDriven) {
 				Result.bStaticRelevance = false;
 				Result.bDynamicRelevance = true;
 			}

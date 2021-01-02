@@ -98,7 +98,7 @@ static TAutoConsoleVariable<float> CVarRayTracingInstancesLowScaleCullRadius(
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
 	TEXT("r.Mobile.GpuDriven"),
-	1,
+	0,
 	TEXT("Whether to allow gpudriven.\n"),
 	ECVF_Scalability
 );
@@ -485,6 +485,9 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 		InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
 	}
 
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	//Use VertexFetch
 	{
 		InstancedStaticMeshData.InstanceOriginComponent = FVertexStreamComponent(
 			&InstanceOriginBuffer,
@@ -527,6 +530,7 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 			EVertexStreamUsage::ManualFetch | EVertexStreamUsage::Instancing
 		);
 	}
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
 
@@ -896,27 +900,48 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 		check(Views.Num() == 1);
 	
 		const FSceneView* View = Views[0];
-		const int32 NumLod = StaticMesh->RenderData->LODResources.Num();
-		check(View->GetDynamicMeshElementsShadowCullFrustum() == nullptr);
-
-		for (int32 LODIndex = 0; LODIndex < NumLod; ++LODIndex) {
+		
+		if (View->GetDynamicMeshElementsShadowCullFrustum()) {
+			const int32 LODIndex = GetLOD(View);
 			const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
-			for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++){
-				//Only one MeshBatch, one MeshBatchElement
-				FMeshBatch& MeshElement = Collector.AllocateMesh();
-				if (GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, false, MeshElement)){
 
-					MeshElement.Elements[0].UserData = &UserData_AllInstances; //#TODO: 重写VertexFactory
+			for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++){
+
+				FMeshBatch& MeshElement = Collector.AllocateMesh();
+
+				if (GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, true, MeshElement))
+				{
+					//@todo-rco this is only supporting selection on the first element
+					MeshElement.Elements[0].UserData = &UserData_AllInstances;
 					MeshElement.Elements[0].bUserDataIsColorVertexBuffer = false;
 					MeshElement.bCanApplyViewModeOverrides = true;
-					MeshElement.bUseSelectionOutline = false;
+					MeshElement.bUseSelectionOutline = false; //参数都是为了决定该参数
 					MeshElement.bUseWireframeSelectionColoring = false;
 
-					const bool bIsShadowView = false;
-					if (!bIsShadowView) {
-						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement);
-					}
 					Collector.AddMesh(0, MeshElement);
+					INC_DWORD_STAT_BY(STAT_StaticMeshTriangles, MeshElement.GetNumPrimitives());
+				}
+			}
+		}
+		else {
+			const int32 NumLod = StaticMesh->RenderData->LODResources.Num();
+			for (int32 LODIndex = 0; LODIndex < NumLod; ++LODIndex) {
+				const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
+				for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++) {
+					//Only one MeshBatch, one MeshBatchElement
+					FMeshBatch& MeshElement = Collector.AllocateMesh();
+					if (GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, false, MeshElement)) {
+
+						MeshElement.Elements[0].UserData = &UserData_AllInstances; //#TODO: 重写VertexFactory
+						MeshElement.Elements[0].bUserDataIsColorVertexBuffer = false;
+						MeshElement.bCanApplyViewModeOverrides = true;
+						MeshElement.bUseSelectionOutline = false;
+						MeshElement.bUseWireframeSelectionColoring = false;
+
+						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement);
+
+						Collector.AddMesh(0, MeshElement);
+					}
 				}
 			}
 		}
