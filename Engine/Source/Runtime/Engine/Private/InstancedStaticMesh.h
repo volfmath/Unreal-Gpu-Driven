@@ -59,8 +59,10 @@ class FStaticMeshInstanceBuffer : public FRenderResource
 {
 public:
 
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	/** Default constructor. */
-	FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess);
+	FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess, bool InUseGpuDriven);
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	/** Destructor. */
 	~FStaticMeshInstanceBuffer();
@@ -113,12 +115,20 @@ public:
 
 	void BindInstanceVertexBuffer(const class FVertexFactory* VertexFactory, struct FInstancedStaticMeshDataType& InstancedStaticMeshData) const;
 
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	void BindManualFetchVertexBuffer(const class FVertexFactory* VertexFactory, struct FManualFetchInstancedStaticMeshDataType& InstancedStaticMeshData) const;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 public:
 	/** The vertex data storage type */
 	TSharedPtr<FStaticMeshInstanceData, ESPMode::ThreadSafe> InstanceData;
 
 	/** Keep CPU copy of instance data*/
 	bool RequireCPUAccess;
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	bool bUseGpuDriven;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 private:
 	class FInstanceOriginBuffer : public FVertexBuffer
@@ -338,6 +348,143 @@ private:
 	LAYOUT_FIELD(FShaderParameter, InstanceOffset)
 };
 
+
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+
+struct FManualFetchInstancedStaticMeshDataType
+{
+	FRHIShaderResourceView* InstanceOriginSRV = nullptr;
+	FRHIShaderResourceView* InstanceTransformSRV = nullptr;
+	FRHIShaderResourceView* InstanceLightmapSRV = nullptr;
+	FRHIShaderResourceView* InstanceCustomDataSRV = nullptr;
+
+	int32 NumCustomDataFloats = 0;
+};
+
+struct FManualFetchInstancedStaticMeshVertexFactory : public FLocalVertexFactory
+{
+	DECLARE_VERTEX_FACTORY_TYPE(FManualFetchInstancedStaticMeshVertexFactory);
+public:
+	FManualFetchInstancedStaticMeshVertexFactory(ERHIFeatureLevel::Type InFeatureLevel)
+		: FLocalVertexFactory(InFeatureLevel, "FInstancedStaticMeshVertexFactory")
+	{
+	}
+
+	struct FDataType : public FManualFetchInstancedStaticMeshDataType, public FLocalVertexFactory::FDataType
+	{
+	};
+
+	/**
+	 * Should we cache the material's shadertype on this platform with this vertex factory?
+	 */
+	static bool ShouldCompilePermutation(const FVertexFactoryShaderPermutationParameters& Parameters);
+
+	/**
+	 * Modify compile environment to enable instancing
+	 * @param OutEnvironment - shader compile environment to modify
+	 */
+	static void ModifyCompilationEnvironment(const FVertexFactoryShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment);
+
+	/**
+	 * An implementation of the interface used by TSynchronizedResource to update the resource with new data from the game thread.
+	 */
+	void SetData(const FDataType& InData)
+	{
+		FLocalVertexFactory::Data = InData;
+		Data = InData;
+		UpdateRHI();
+	}
+
+	/**
+	 * Copy the data from another vertex factory
+	 * @param Other - factory to copy from
+	 */
+	void Copy(const FManualFetchInstancedStaticMeshVertexFactory& Other);
+
+	// FRenderResource interface.
+	virtual void InitRHI() override;
+
+	/** Make sure we account for changes in the signature of GetStaticBatchElementVisibility() */
+	static CONSTEXPR uint32 NumBitsForVisibilityMask()
+	{
+		return 8 * sizeof(decltype(((FManualFetchInstancedStaticMeshVertexFactory*)nullptr)->GetStaticBatchElementVisibility(FSceneView(FSceneViewInitOptions()), nullptr)));
+	}
+
+	/**
+	* Get a bitmask representing the visibility of each FMeshBatch element.
+	*/
+	virtual uint64 GetStaticBatchElementVisibility(const class FSceneView& View, const struct FMeshBatch* Batch, const void* ViewCustomData = nullptr) const override
+	{
+		const uint32 NumBits = NumBitsForVisibilityMask();
+		const uint32 NumElements = FMath::Min((uint32)Batch->Elements.Num(), NumBits);
+		return NumElements == NumBits ? ~0ULL : (1ULL << (uint64)NumElements) - 1ULL;
+	}
+
+#if ALLOW_DITHERED_LOD_FOR_INSTANCED_STATIC_MESHES
+	virtual bool SupportsNullPixelShader() const override { return false; }
+#endif
+
+	inline FRHIShaderResourceView* GetInstanceOriginSRV() const
+	{
+		return Data.InstanceOriginSRV;
+	}
+
+	inline FRHIShaderResourceView* GetInstanceTransformSRV() const
+	{
+		return Data.InstanceTransformSRV;
+	}
+
+	inline FRHIShaderResourceView* GetInstanceLightmapSRV() const
+	{
+		return Data.InstanceLightmapSRV;
+	}
+
+	inline FRHIShaderResourceView* GetInstanceCustomDataSRV() const
+	{
+		return Data.InstanceCustomDataSRV;
+	}
+
+	FRHIUniformBuffer* GetUniformBuffer() const
+	{
+		return UniformBuffer.GetReference();
+	}
+
+private:
+	FDataType Data;
+
+	TUniformBufferRef<FInstancedStaticMeshVertexFactoryUniformShaderParameters> UniformBuffer;
+};
+
+class FManualFetchInstancedStaticMeshVertexFactoryShaderParameters : public FLocalVertexFactoryShaderParametersBase
+{
+	DECLARE_TYPE_LAYOUT(FManualFetchInstancedStaticMeshVertexFactoryShaderParameters, NonVirtual);
+public:
+	void Bind(const FShaderParameterMap& ParameterMap)
+	{
+		FLocalVertexFactoryShaderParametersBase::Bind(ParameterMap);
+		InstancingFadeOutParamsParameter.Bind(ParameterMap, TEXT("InstancingFadeOutParams"));
+		InstancingOffsetParameter.Bind(ParameterMap, TEXT("InstancingOffset")); //Stay for compatibility 
+	}
+
+	void GetElementShaderBindings(
+		const class FSceneInterface* Scene,
+		const FSceneView* View,
+		const FMeshMaterialShader* Shader,
+		const EVertexInputStreamType InputStreamType,
+		ERHIFeatureLevel::Type FeatureLevel,
+		const FVertexFactory* VertexFactory,
+		const FMeshBatchElement& BatchElement,
+		FMeshDrawSingleShaderBindings& ShaderBindings,
+		FVertexInputStreamArray& VertexStreams
+	) const;
+
+private:
+
+	LAYOUT_FIELD(FShaderParameter, InstancingFadeOutParamsParameter)
+	LAYOUT_FIELD(FShaderParameter, InstancingOffsetParameter);
+};
+//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 struct FInstanceUpdateCmdBuffer;
 /*-----------------------------------------------------------------------------
 	FPerInstanceRenderData
@@ -346,7 +493,10 @@ struct FInstanceUpdateCmdBuffer;
 struct FPerInstanceRenderData
 {
 	// Should be always constructed on main thread
-	FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess);
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess, bool InUseGpuDriven);
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	~FPerInstanceRenderData();
 
 	/**
@@ -375,13 +525,17 @@ struct FPerInstanceRenderData
 /*-----------------------------------------------------------------------------
 	FInstancedStaticMeshRenderData
 -----------------------------------------------------------------------------*/
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+
+//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 class FInstancedStaticMeshRenderData
 {
 public:
 
-	FInstancedStaticMeshRenderData(UInstancedStaticMeshComponent* InComponent, ERHIFeatureLevel::Type InFeatureLevel)
-	  : Component(InComponent)
+	FInstancedStaticMeshRenderData(UInstancedStaticMeshComponent* InComponent, const bool InUseGpuDriven, ERHIFeatureLevel::Type InFeatureLevel)
+	  : bUseGpuDriven(InUseGpuDriven)
+	  ,	Component(InComponent)
 	  , PerInstanceRenderData(InComponent->PerInstanceRenderData)
 	  , LODModels(Component->GetStaticMesh()->RenderData->LODResources)
 	  , FeatureLevel(InFeatureLevel)
@@ -389,31 +543,59 @@ public:
 		check(PerInstanceRenderData.IsValid());
 		// Allocate the vertex factories for each LOD
 		InitVertexFactories();
+
 		RegisterSpeedTreeWind();
 	}
 
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	void ReleaseResources(FSceneInterface* Scene, const UStaticMesh* StaticMesh)
 	{
 		// unregister SpeedTree wind with the scene
 		if (Scene && StaticMesh && StaticMesh->SpeedTreeWind.IsValid())
 		{
-			for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
-			{
-				Scene->RemoveSpeedTreeWind_RenderThread(&VertexFactories[LODIndex], StaticMesh);
+			if (bUseGpuDriven) {
+				for (int32 LODIndex = 0; LODIndex < ManualFetchVertexFactories.Num(); LODIndex++)
+				{
+					Scene->RemoveSpeedTreeWind_RenderThread(&ManualFetchVertexFactories[LODIndex], StaticMesh);
+				}
+			}
+			else {
+				for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
+				{
+					Scene->RemoveSpeedTreeWind_RenderThread(&VertexFactories[LODIndex], StaticMesh);
+				}
 			}
 		}
-
-		for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
-		{
-			VertexFactories[LODIndex].ReleaseResource();
+		
+		if (bUseGpuDriven) {
+			for (int32 LODIndex = 0; LODIndex < ManualFetchVertexFactories.Num(); LODIndex++)
+			{
+				ManualFetchVertexFactories[LODIndex].ReleaseResource();
+			}
 		}
+		else {
+			for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
+			{
+				VertexFactories[LODIndex].ReleaseResource();
+			}
+		}			
 	}
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	/** Use GPU Driven*/
+	bool bUseGpuDriven;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	/** Source component */
 	UInstancedStaticMeshComponent* Component;
 
 	/** Per instance render data, could be shared with component */
 	TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> PerInstanceRenderData;
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	TIndirectArray<FManualFetchInstancedStaticMeshVertexFactory> ManualFetchVertexFactories;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	/** Vertex factory */
 	TIndirectArray<FInstancedStaticMeshVertexFactory> VertexFactories;
@@ -427,17 +609,27 @@ public:
 private:
 	void InitVertexFactories();
 
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	void RegisterSpeedTreeWind()
 	{
 		// register SpeedTree wind with the scene
 		if (Component->GetStaticMesh()->SpeedTreeWind.IsValid())
 		{
-			for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
-			{
-				Component->GetScene()->AddSpeedTreeWind(&VertexFactories[LODIndex], Component->GetStaticMesh());
+			if (bUseGpuDriven) {
+				for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
+				{
+					Component->GetScene()->AddSpeedTreeWind(&ManualFetchVertexFactories[LODIndex], Component->GetStaticMesh());
+				}
+			}
+			else {
+				for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
+				{
+					Component->GetScene()->AddSpeedTreeWind(&VertexFactories[LODIndex], Component->GetStaticMesh());
+				}
 			}
 		}
 	}
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 };
 
 
@@ -452,8 +644,12 @@ public:
 
 	FInstancedStaticMeshSceneProxy(UInstancedStaticMeshComponent* InComponent, ERHIFeatureLevel::Type InFeatureLevel)
 	:	FStaticMeshSceneProxy(InComponent, true)
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	,   bUseGpuDriven(InComponent->PerInstanceRenderData->InstanceBuffer.bUseGpuDriven)
+	,   UniqueObjectId(0xFFFFFFFF)
 	,	StaticMesh(InComponent->GetStaticMesh())
-	,	InstancedRenderData(InComponent, InFeatureLevel)
+	,	InstancedRenderData(InComponent, bUseGpuDriven, InFeatureLevel)
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 #if WITH_EDITOR
 	,	bHasSelectedInstances(InComponent->SelectedInstances.Num() > 0)
 #endif
@@ -465,7 +661,7 @@ public:
 		SetupRayTracingCullClusters();
 #endif
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		if (InFeatureLevel == ERHIFeatureLevel::Type::ES3_1) {
+		if (bUseGpuDriven) {
 			SetupGPUDrivenData(InComponent);
 		}
 		//@StarLight code - END GPU-Driven, Added by yanjianhong
@@ -484,8 +680,10 @@ public:
 	// FPrimitiveSceneProxy interface.
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	static bool UseMobileGPUDriven(UInstancedStaticMeshComponent* InComponent);
 	void SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent);
 	void SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const;
+	//#TODO: No longer need DrawStaticElement unless VT
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 
 	virtual void DestroyRenderThreadResources() override;
@@ -504,7 +702,7 @@ public:
 			}
 #endif
 			//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-			if (bIsUseGPUDriven) {
+			if (bUseGpuDriven) {
 				Result.bStaticRelevance = false;
 				Result.bDynamicRelevance = true;
 			}
@@ -563,7 +761,7 @@ public:
 protected:
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	friend struct FMeshEntity;
-	bool bIsUseGPUDriven;
+	bool bUseGpuDriven;
 	uint32 UniqueObjectId;
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 

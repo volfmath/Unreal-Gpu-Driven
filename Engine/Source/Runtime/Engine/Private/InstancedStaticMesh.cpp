@@ -47,11 +47,14 @@
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 #include "MobileGPUDriven.h"
+#include "VT/RuntimeVirtualTexture.h"
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 
 IMPLEMENT_TYPE_LAYOUT(FInstancedStaticMeshVertexFactoryShaderParameters);
-
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+IMPLEMENT_TYPE_LAYOUT(FManualFetchInstancedStaticMeshVertexFactoryShaderParameters);
+//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 const int32 InstancedStaticMeshMaxTexCoord = 8;
 
@@ -98,7 +101,7 @@ static TAutoConsoleVariable<float> CVarRayTracingInstancesLowScaleCullRadius(
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
 	TEXT("r.Mobile.GpuDriven"),
-	0,
+	1,
 	TEXT("Whether to allow gpudriven.\n"),
 	ECVF_Scalability
 );
@@ -277,9 +280,10 @@ void FInstanceUpdateCmdBuffer::Reset()
 	NumEdits = 0;
 }
 
-FStaticMeshInstanceBuffer::FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess)
+FStaticMeshInstanceBuffer::FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess, bool InUseGpuDriven)
 	: FRenderResource(InFeatureLevel)
 	, RequireCPUAccess(InRequireCPUAccess)
+	, bUseGpuDriven(InUseGpuDriven)
 {
 }
 
@@ -461,7 +465,11 @@ void FStaticMeshInstanceBuffer::CreateVertexBuffer(FResourceArrayInterface* InRe
 	FRHIResourceCreateInfo CreateInfo(InResourceArray);
 	OutVertexBufferRHI = RHICreateVertexBuffer(InResourceArray->GetResourceDataSize(), InUsage, CreateInfo);
 	
-	if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform))
+	if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform)
+		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+		|| bUseGpuDriven
+		//@StarLight code - END GPU-Driven, Added by yanjianhong
+		)
 	{
 		OutInstanceSRV = RHICreateShaderResourceView(OutVertexBufferRHI, InStride, InFormat);
 	}
@@ -485,9 +493,6 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 		InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
 	}
 
-
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	//Use VertexFetch
 	{
 		InstancedStaticMeshData.InstanceOriginComponent = FVertexStreamComponent(
 			&InstanceOriginBuffer,
@@ -530,9 +535,28 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 			EVertexStreamUsage::ManualFetch | EVertexStreamUsage::Instancing
 		);
 	}
-	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+void FStaticMeshInstanceBuffer::BindManualFetchVertexBuffer(const class FVertexFactory* VertexFactory, struct FManualFetchInstancedStaticMeshDataType& InstancedStaticMeshData) const{
+
+	check(bUseGpuDriven);
+
+	if (InstanceData->GetNumInstances())
+	{
+		check(InstanceOriginSRV);
+		check(InstanceTransformSRV);
+		check(InstanceLightmapSRV);
+		check(InstanceCustomDataSRV); // Should not be nullptr, but can be assigned a dummy buffer
+	}
+
+	InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
+	InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
+	InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
+	InstancedStaticMeshData.InstanceCustomDataSRV = InstanceCustomDataSRV;
+	InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
+}
+//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 void FStaticMeshInstanceData::Serialize(FArchive& Ar)
 {	
@@ -802,47 +826,90 @@ IMPLEMENT_VERTEX_FACTORY_PARAMETER_TYPE(FInstancedStaticMeshVertexFactory, SF_Ra
 
 IMPLEMENT_VERTEX_FACTORY_TYPE_EX(FInstancedStaticMeshVertexFactory,"/Engine/Private/LocalVertexFactory.ush",true,true,true,true,true,true,false);
 
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 void FInstancedStaticMeshRenderData::InitVertexFactories()
 {
-	// Allocate the vertex factories for each LOD
-	for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
-	{
-		VertexFactories.Add(new FInstancedStaticMeshVertexFactory(FeatureLevel));
-	}
-
-	const int32 LightMapCoordinateIndex = Component->GetStaticMesh()->LightMapCoordinateIndex;
-	ENQUEUE_RENDER_COMMAND(InstancedStaticMeshRenderData_InitVertexFactories)(
-		[this, LightMapCoordinateIndex](FRHICommandListImmediate& RHICmdList)
-	{
-		for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
+	if (bUseGpuDriven) {
+		for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
 		{
-			const FStaticMeshLODResources* RenderData = &LODModels[LODIndex];
-
-			FInstancedStaticMeshVertexFactory::FDataType Data;
-			// Assign to the vertex factory for this LOD.
-			FInstancedStaticMeshVertexFactory& VertexFactory = VertexFactories[LODIndex];
-
-			RenderData->VertexBuffers.PositionVertexBuffer.BindPositionVertexBuffer(&VertexFactory, Data);
-			RenderData->VertexBuffers.StaticMeshVertexBuffer.BindTangentVertexBuffer(&VertexFactory, Data);
-			RenderData->VertexBuffers.StaticMeshVertexBuffer.BindPackedTexCoordVertexBuffer(&VertexFactory, Data);
-			if (LightMapCoordinateIndex < (int32)RenderData->VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords() && LightMapCoordinateIndex >= 0)
-			{
-				RenderData->VertexBuffers.StaticMeshVertexBuffer.BindLightMapVertexBuffer(&VertexFactory, Data, LightMapCoordinateIndex);
-			}
-			RenderData->VertexBuffers.ColorVertexBuffer.BindColorVertexBuffer(&VertexFactory, Data);
-
-			check(PerInstanceRenderData);
-			PerInstanceRenderData->InstanceBuffer.BindInstanceVertexBuffer(&VertexFactory, Data);
-
-			VertexFactory.SetData(Data);
-			VertexFactory.InitResource();
+			ManualFetchVertexFactories.Add(new FManualFetchInstancedStaticMeshVertexFactory(FeatureLevel));
 		}
-	});
-}
 
-FPerInstanceRenderData::FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess)
+		const int32 LightMapCoordinateIndex = Component->GetStaticMesh()->LightMapCoordinateIndex;
+		ENQUEUE_RENDER_COMMAND(InstancedStaticMeshRenderData_InitVertexFactories)(
+			[this, LightMapCoordinateIndex](FRHICommandListImmediate& RHICmdList)
+			{
+				for (int32 LODIndex = 0; LODIndex < ManualFetchVertexFactories.Num(); LODIndex++)
+				{
+					const FStaticMeshLODResources* RenderData = &LODModels[LODIndex];
+
+					FManualFetchInstancedStaticMeshVertexFactory::FDataType Data;
+					// Assign to the vertex factory for this LOD.
+					FManualFetchInstancedStaticMeshVertexFactory& VertexFactory = ManualFetchVertexFactories[LODIndex];
+
+					RenderData->VertexBuffers.PositionVertexBuffer.BindPositionVertexBuffer(&VertexFactory, Data);
+					RenderData->VertexBuffers.StaticMeshVertexBuffer.BindTangentVertexBuffer(&VertexFactory, Data);
+					RenderData->VertexBuffers.StaticMeshVertexBuffer.BindPackedTexCoordVertexBuffer(&VertexFactory, Data);
+					if (LightMapCoordinateIndex < (int32)RenderData->VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords() && LightMapCoordinateIndex >= 0)
+					{
+						RenderData->VertexBuffers.StaticMeshVertexBuffer.BindLightMapVertexBuffer(&VertexFactory, Data, LightMapCoordinateIndex);
+					}
+					RenderData->VertexBuffers.ColorVertexBuffer.BindColorVertexBuffer(&VertexFactory, Data);
+
+					check(PerInstanceRenderData);
+					PerInstanceRenderData->InstanceBuffer.BindManualFetchVertexBuffer(&VertexFactory, Data);
+
+					VertexFactory.SetData(Data);
+					VertexFactory.InitResource();
+				}
+			}
+		);
+	}
+	else {
+		// Allocate the vertex factories for each LOD
+		for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
+		{
+			VertexFactories.Add(new FInstancedStaticMeshVertexFactory(FeatureLevel));
+		}
+
+		const int32 LightMapCoordinateIndex = Component->GetStaticMesh()->LightMapCoordinateIndex;
+		ENQUEUE_RENDER_COMMAND(InstancedStaticMeshRenderData_InitVertexFactories)(
+			[this, LightMapCoordinateIndex](FRHICommandListImmediate& RHICmdList)
+			{
+				for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
+				{
+					const FStaticMeshLODResources* RenderData = &LODModels[LODIndex];
+
+					FInstancedStaticMeshVertexFactory::FDataType Data;
+					// Assign to the vertex factory for this LOD.
+					FInstancedStaticMeshVertexFactory& VertexFactory = VertexFactories[LODIndex];
+
+					RenderData->VertexBuffers.PositionVertexBuffer.BindPositionVertexBuffer(&VertexFactory, Data);
+					RenderData->VertexBuffers.StaticMeshVertexBuffer.BindTangentVertexBuffer(&VertexFactory, Data);
+					RenderData->VertexBuffers.StaticMeshVertexBuffer.BindPackedTexCoordVertexBuffer(&VertexFactory, Data);
+					if (LightMapCoordinateIndex < (int32)RenderData->VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords() && LightMapCoordinateIndex >= 0)
+					{
+						RenderData->VertexBuffers.StaticMeshVertexBuffer.BindLightMapVertexBuffer(&VertexFactory, Data, LightMapCoordinateIndex);
+					}
+					RenderData->VertexBuffers.ColorVertexBuffer.BindColorVertexBuffer(&VertexFactory, Data);
+
+					check(PerInstanceRenderData);
+					PerInstanceRenderData->InstanceBuffer.BindInstanceVertexBuffer(&VertexFactory, Data);
+
+					VertexFactory.SetData(Data);
+					VertexFactory.InitResource();
+				}
+			}
+		);
+	}
+}
+//@StarLight code - END GPU-Driven, Added by yanjianhong
+
+FPerInstanceRenderData::FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess, bool InUseGpuDriven)
 	: ResourceSize(InRequireCPUAccess ? Other.GetResourceSize() : 0)
-	, InstanceBuffer(InFeaureLevel, InRequireCPUAccess)
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	, InstanceBuffer(InFeaureLevel, InRequireCPUAccess, InUseGpuDriven)
+//@StarLight code - END GPU-Driven, Added by yanjianhong
 {
 	InstanceBuffer.InitFromPreallocatedData(Other);
 	InstanceBuffer_GameThread = InstanceBuffer.InstanceData;
@@ -895,28 +962,36 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 {
 	QUICK_SCOPE_CYCLE_COUNTER(STAT_InstancedStaticMeshSceneProxy_GetMeshElements);
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	if (bIsUseGPUDriven && !bHasSelectedInstances) { //not support selected
-		check(RuntimeVirtualTextureMaterialTypes.Num() == 0); //not support vt
-		check(Views.Num() == 1);
+	if (bUseGpuDriven && !bHasSelectedInstances) { //not support selected
+		//check(RuntimeVirtualTextureMaterialTypes.Num() == 0); //not support vt
+		//check(Views.Num() == 1);
 	
 		const FSceneView* View = Views[0];
 		
+		//阴影不需要IndirectDraw
 		if (View->GetDynamicMeshElementsShadowCullFrustum()) {
 			const int32 LODIndex = GetLOD(View);
 			const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
 
 			for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++){
-
 				FMeshBatch& MeshElement = Collector.AllocateMesh();
+				if (FStaticMeshSceneProxy::GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, true, MeshElement)){
 
-				if (GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, true, MeshElement))
-				{
-					//@todo-rco this is only supporting selection on the first element
-					MeshElement.Elements[0].UserData = &UserData_AllInstances;
-					MeshElement.Elements[0].bUserDataIsColorVertexBuffer = false;
+					check(LODIndex < InstancedRenderData.ManualFetchVertexFactories.Num());
+
+					MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex];
 					MeshElement.bCanApplyViewModeOverrides = true;
-					MeshElement.bUseSelectionOutline = false; //参数都是为了决定该参数
+					MeshElement.bUseSelectionOutline = false; //决定渲染Hit的参数
 					MeshElement.bUseWireframeSelectionColoring = false;
+
+					const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
+					FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
+					BatchElement0.UserData = (void*)&UserData_AllInstances;
+					BatchElement0.bUserDataIsColorVertexBuffer = false;
+					BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
+					BatchElement0.UserIndex = 0; //Not needed used to Dithered
+					BatchElement0.PrimitiveUniformBuffer = GetUniformBuffer();
+					BatchElement0.NumInstances = NumInstances;
 
 					Collector.AddMesh(0, MeshElement);
 					INC_DWORD_STAT_BY(STAT_StaticMeshTriangles, MeshElement.GetNumPrimitives());
@@ -930,16 +1005,25 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 				for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++) {
 					//Only one MeshBatch, one MeshBatchElement
 					FMeshBatch& MeshElement = Collector.AllocateMesh();
-					if (GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, false, MeshElement)) {
+					if (FStaticMeshSceneProxy::GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, false, MeshElement)) {
 
-						MeshElement.Elements[0].UserData = &UserData_AllInstances; //#TODO: 重写VertexFactory
-						MeshElement.Elements[0].bUserDataIsColorVertexBuffer = false;
+						check(LODIndex < InstancedRenderData.ManualFetchVertexFactories.Num());
+
+						MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex];
 						MeshElement.bCanApplyViewModeOverrides = true;
-						MeshElement.bUseSelectionOutline = false;
+						MeshElement.bUseSelectionOutline = false; //决定渲染Hit的参数
 						MeshElement.bUseWireframeSelectionColoring = false;
 
-						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement);
+						const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
+						FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
+						BatchElement0.UserData = (void*)&UserData_AllInstances;
+						BatchElement0.bUserDataIsColorVertexBuffer = false;
+						BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
+						BatchElement0.UserIndex = 0; //Not needed used to Dithered
+						BatchElement0.PrimitiveUniformBuffer = GetUniformBuffer();
+						BatchElement0.NumInstances = NumInstances;
 
+						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement);
 						Collector.AddMesh(0, MeshElement);
 					}
 				}
@@ -1110,23 +1194,38 @@ void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, 
 
 void FInstancedStaticMeshSceneProxy::SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent) {
 	UniqueObjectId = InComponent->GetUniqueID();
+}
 
+bool FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(UInstancedStaticMeshComponent* InComponent) {
+	check(InComponent);
 	auto SupportsDitheredLODTransitions = [InComponent]() -> bool
 	{
 		TArray<class UMaterialInterface*> Materials = InComponent->GetMaterials();
-		for (UMaterialInterface* Material : Materials){
-			if (Material && !Material->IsDitheredLODTransition()){
-				return false;
+		for (UMaterialInterface* Material : Materials) {
+			if (Material && Material->IsDitheredLODTransition()) {
+				return true;
 			}
 		}
-		return true;
+		return false;
 	};
 
-	//#TODO: 手动带入标记, 只有标记的ISM才会进行GPU-Driven流程
-	bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0
-		/* && InComponent->EnableGPUDriven*/
-		&& RuntimeVirtualTextureMaterialTypes.Num() == 0
-		&& !SupportsDitheredLODTransitions();
+	auto SupportVirtualTexture = [InComponent]() -> bool
+	{
+		for (URuntimeVirtualTexture* VirtualTexture : InComponent->GetRuntimeVirtualTextures())
+		{
+			if (VirtualTexture != nullptr && VirtualTexture->GetEnabled())
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
+	return CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 
+		/*&& InFeatureLevel == ERHIFeatureLevel::Type::ES3_1*/ //某些从编辑器拖进Scene的物体FeatureLevel为ES5
+		&& !SupportsDitheredLODTransitions() 
+		&& !SupportVirtualTexture()
+		/* && InComponent->UseGpuDriven()*/;
 }
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -2074,15 +2173,14 @@ void UInstancedStaticMeshComponent::ReleasePerInstanceRenderData()
 	{
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 		//与PerInstanceRenderData生命周期相同,不会重复释放
-		const bool bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0;
-		if (bIsUseGPUDriven) {		
-			//先查询是否注册
-			uint32 UniqueObjectId = GetUniqueID();
-			auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId);
-			if (CurrentSystem) {
-				FMobileGPUDrivenSystem::UnRegisterEntity(UniqueObjectId);
-			}
+
+		//查询是否注册
+		uint32 UniqueObjectId = GetUniqueID();
+		auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId);
+		if (CurrentSystem) {
+			FMobileGPUDrivenSystem::UnRegisterEntity(UniqueObjectId);
 		}
+
 		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 
 
@@ -2930,9 +3028,13 @@ void UInstancedStaticMeshComponent::InitPerInstanceRenderData(bool InitializeFro
 
 	bool KeepInstanceBufferCPUAccess = GIsEditor || InRequireCPUAccess || ComponentRequestsCPUAccess(this, FeatureLevel);
 
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	const bool bUseGpuDriven = FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this) && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World);
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 	if (InSharedInstanceBufferData != nullptr)
 	{
-		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(*InSharedInstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess));
+		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(*InSharedInstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess, bUseGpuDriven));
 	}
 	else
 	{
@@ -2946,13 +3048,13 @@ void UInstancedStaticMeshComponent::InitPerInstanceRenderData(bool InitializeFro
 			BuildRenderData(InstanceBufferData, HitProxies);
 		}
 			
-		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(InstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess));
+		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(InstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess, bUseGpuDriven));
 		PerInstanceRenderData->HitProxies = MoveTemp(HitProxies);
 	}
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	const bool bIsUseGPUDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World) /*&& World->FeatureLevel == ERHIFeatureLevel::Type::ES3_1*/;
-	if (bIsUseGPUDriven) {
+	/*const bool bUseGpuDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World);*/
+	if (bUseGpuDriven) {
 		//Just register
 		FMobileGPUDrivenSystem::RegisterEntity(this);
 	}
@@ -3464,3 +3566,233 @@ void FInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings
 
 	}
 }
+
+
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings(
+	const class FSceneInterface* Scene,
+	const FSceneView* View,
+	const FMeshMaterialShader* Shader,
+	const EVertexInputStreamType InputStreamType,
+	ERHIFeatureLevel::Type FeatureLevel,
+	const FVertexFactory* VertexFactory,
+	const FMeshBatchElement& BatchElement,
+	FMeshDrawSingleShaderBindings& ShaderBindings,
+	FVertexInputStreamArray& VertexStreams
+) const
+{
+	// Decode VertexFactoryUserData as VertexFactoryUniformBuffer
+	FRHIUniformBuffer* VertexFactoryUniformBuffer = static_cast<FRHIUniformBuffer*>(BatchElement.VertexFactoryUserData);
+	FLocalVertexFactoryShaderParametersBase::GetElementShaderBindingsBase(Scene, View, Shader, InputStreamType, FeatureLevel, VertexFactory, BatchElement, VertexFactoryUniformBuffer, ShaderBindings, VertexStreams);
+
+	const FInstancingUserData* InstancingUserData = (const FInstancingUserData*)BatchElement.UserData;
+	const auto* InstancedVertexFactory = static_cast<const FManualFetchInstancedStaticMeshVertexFactory*>(VertexFactory);
+	const int32 InstanceOffsetValue = BatchElement.UserIndex;
+
+	ShaderBindings.Add(Shader->GetUniformBufferParameter<FInstancedStaticMeshVertexFactoryUniformShaderParameters>(), InstancedVertexFactory->GetUniformBuffer());
+
+	if (InstancingFadeOutParamsParameter.IsBound())
+	{
+		FVector4 InstancingFadeOutParams(MAX_flt, 0.f, 1.f, 1.f);
+		if (InstancingUserData)
+		{
+			const float MaxDrawDistanceScale = GetCachedScalabilityCVars().ViewDistanceScale;
+			const float StartDistance = InstancingUserData->StartCullDistance * MaxDrawDistanceScale;
+			const float EndDistance = InstancingUserData->EndCullDistance * MaxDrawDistanceScale;
+
+			InstancingFadeOutParams.X = StartDistance;
+			if (EndDistance > 0)
+			{
+				if (EndDistance > StartDistance)
+				{
+					InstancingFadeOutParams.Y = 1.f / (float)(EndDistance - StartDistance);
+				}
+				else
+				{
+					InstancingFadeOutParams.Y = 1.f;
+				}
+			}
+			else
+			{
+				InstancingFadeOutParams.Y = 0.f;
+			}
+			if (CVarCullAllInVertexShader.GetValueOnRenderThread() > 0)
+			{
+				InstancingFadeOutParams.Z = 0.0f;
+				InstancingFadeOutParams.W = 0.0f;
+			}
+			else
+			{
+				InstancingFadeOutParams.Z = InstancingUserData->bRenderSelected ? 1.f : 0.f;
+				InstancingFadeOutParams.W = InstancingUserData->bRenderUnselected ? 1.f : 0.f;
+			}
+		}
+
+		ShaderBindings.Add(InstancingFadeOutParamsParameter, InstancingFadeOutParams);
+
+	}
+}
+
+bool FManualFetchInstancedStaticMeshVertexFactory::ShouldCompilePermutation(const FVertexFactoryShaderPermutationParameters& Parameters)
+{
+	return (Parameters.MaterialParameters.bIsUsedWithInstancedStaticMeshes || Parameters.MaterialParameters.bIsSpecialEngineMaterial)
+		&& FLocalVertexFactory::ShouldCompilePermutation(Parameters) 
+		&& IsMobilePlatform(Parameters.Platform);
+}
+
+void FManualFetchInstancedStaticMeshVertexFactory::ModifyCompilationEnvironment(const FVertexFactoryShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+{
+	check(!RHISupportsManualVertexFetch(Parameters.Platform));
+	//const bool ContainsManualVertexFetch = OutEnvironment.GetDefinitions().Contains("MANUAL_VERTEX_FETCH");
+	//if (RHISupportsManualVertexFetch(Parameters.Platform))
+	//{
+	//	check(!ContainsManualVertexFetch);
+	//	OutEnvironment.SetDefine(TEXT("MANUAL_VERTEX_FETCH"), TEXT("1"));
+	//}
+	//else {
+	OutEnvironment.SetDefine(TEXT("MANUAL_VERTEX_FETCH"), TEXT("0"));
+	OutEnvironment.SetDefine(TEXT("MOBILE_INSTANCE_MANUALFETCH"), TEXT("1"));
+	//}
+
+	OutEnvironment.SetDefine(TEXT("USE_INSTANCING"), TEXT("1"));
+	// Does not support Dithered
+	OutEnvironment.SetDefine(TEXT("USE_DITHERED_LOD_TRANSITION_FOR_INSTANCED"), 0);
+	FLocalVertexFactory::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+}
+
+
+/**
+ * Copy the data from another vertex factory
+ * @param Other - factory to copy from
+ */
+void FManualFetchInstancedStaticMeshVertexFactory::Copy(const FManualFetchInstancedStaticMeshVertexFactory& Other)
+{
+	FManualFetchInstancedStaticMeshVertexFactory* VertexFactory = this;
+	const FDataType* DataCopy = &Other.Data;
+	ENQUEUE_RENDER_COMMAND(FInstancedStaticMeshVertexFactoryCopyData)(
+		[VertexFactory, DataCopy](FRHICommandListImmediate& RHICmdList)
+		{
+			VertexFactory->Data = *DataCopy;
+		});
+	BeginUpdateResourceRHI(this);
+}
+
+void FManualFetchInstancedStaticMeshVertexFactory::InitRHI()
+{
+	SCOPED_LOADTIMER(FInstancedStaticMeshVertexFactory_InitRHI);
+
+	check(HasValidFeatureLevel());
+
+#if !ALLOW_DITHERED_LOD_FOR_INSTANCED_STATIC_MESHES // position(and normal) only shaders cannot work with dithered LOD
+	// If the vertex buffer containing position is not the same vertex buffer containing the rest of the data,
+	// then initialize PositionStream and PositionDeclaration.
+	if (Data.PositionComponent.VertexBuffer != Data.TangentBasisComponents[0].VertexBuffer)
+	{
+		auto AddDeclaration = [&Data](EVertexInputStreamType InputStreamType, bool bInstanced, bool bAddNormal)
+		{
+			FVertexDeclarationElementList StreamElements;
+			StreamElements.Add(AccessPositionStreamComponent(Data.PositionComponent, 0));
+
+			bAddNormal = bAddNormal && Data.TangentBasisComponents[1].VertexBuffer != NULL;
+			if (bAddNormal)
+			{
+				StreamElements.Add(AccessStreamComponent(Data.TangentBasisComponents[1], 2, InputStreamType));
+			}
+
+			if (bInstanced)
+			{
+				// toss in the instanced location stream
+				StreamElements.Add(AccessPositionStreamComponent(Data.InstanceOriginComponent, 8));
+				StreamElements.Add(AccessPositionStreamComponent(Data.InstanceTransformComponent[0], 9));
+				StreamElements.Add(AccessPositionStreamComponent(Data.InstanceTransformComponent[1], 10));
+				StreamElements.Add(AccessPositionStreamComponent(Data.InstanceTransformComponent[2], 11));
+			}
+
+			InitDeclaration(StreamElements, InputStreamType);
+		};
+		AddDeclaration(EVertexInputStreamType::PositionOnly, bInstanced, false);
+		AddDeclaration(EVertexInputStreamType::PositionAndNormalOnly, bInstanced, true);
+	}
+#endif
+
+	FVertexDeclarationElementList Elements;
+	if (Data.PositionComponent.VertexBuffer != NULL)
+	{
+		Elements.Add(AccessStreamComponent(Data.PositionComponent, 0));
+	}
+
+	// only tangent,normal are used by the stream. the binormal is derived in the shader
+	uint8 TangentBasisAttributes[2] = { 1, 2 };
+	for (int32 AxisIndex = 0; AxisIndex < 2; AxisIndex++)
+	{
+		if (Data.TangentBasisComponents[AxisIndex].VertexBuffer != NULL)
+		{
+			Elements.Add(AccessStreamComponent(Data.TangentBasisComponents[AxisIndex], TangentBasisAttributes[AxisIndex]));
+		}
+	}
+
+	if (Data.ColorComponentsSRV == nullptr)
+	{
+		Data.ColorComponentsSRV = GNullColorVertexBuffer.VertexBufferSRV;
+		Data.ColorIndexMask = 0;
+	}
+
+	if (Data.ColorComponent.VertexBuffer)
+	{
+		Elements.Add(AccessStreamComponent(Data.ColorComponent, 3));
+	}
+	else
+	{
+		//If the mesh has no color component, set the null color buffer on a new stream with a stride of 0.
+		//This wastes 4 bytes of bandwidth per vertex, but prevents having to compile out twice the number of vertex factories.
+		FVertexStreamComponent NullColorComponent(&GNullColorVertexBuffer, 0, 0, VET_Color, EVertexStreamUsage::ManualFetch);
+		Elements.Add(AccessStreamComponent(NullColorComponent, 3));
+	}
+
+	if (Data.TextureCoordinates.Num())
+	{
+		const int32 BaseTexCoordAttribute = 4;
+		for (int32 CoordinateIndex = 0; CoordinateIndex < Data.TextureCoordinates.Num(); CoordinateIndex++)
+		{
+			Elements.Add(AccessStreamComponent(
+				Data.TextureCoordinates[CoordinateIndex],
+				BaseTexCoordAttribute + CoordinateIndex
+			));
+		}
+
+		for (int32 CoordinateIndex = Data.TextureCoordinates.Num(); CoordinateIndex < (InstancedStaticMeshMaxTexCoord + 1) / 2; CoordinateIndex++)
+		{
+			Elements.Add(AccessStreamComponent(
+				Data.TextureCoordinates[Data.TextureCoordinates.Num() - 1],
+				BaseTexCoordAttribute + CoordinateIndex
+			));
+		}
+	}
+
+	if (Data.LightMapCoordinateComponent.VertexBuffer)
+	{
+		Elements.Add(AccessStreamComponent(Data.LightMapCoordinateComponent, 15));
+	}
+	else if (Data.TextureCoordinates.Num())
+	{
+		Elements.Add(AccessStreamComponent(Data.TextureCoordinates[0], 15));
+	}
+
+
+	// we don't need per-vertex shadow or lightmap rendering
+	InitDeclaration(Elements);
+
+	{
+		FInstancedStaticMeshVertexFactoryUniformShaderParameters UniformParameters;
+		UniformParameters.VertexFetch_InstanceOriginBuffer = GetInstanceOriginSRV();
+		UniformParameters.VertexFetch_InstanceTransformBuffer = GetInstanceTransformSRV();
+		UniformParameters.VertexFetch_InstanceLightmapBuffer = GetInstanceLightmapSRV();
+		UniformParameters.InstanceCustomDataBuffer = GetInstanceCustomDataSRV();
+		UniformParameters.NumCustomDataFloats = Data.NumCustomDataFloats;
+		UniformBuffer = TUniformBufferRef<FInstancedStaticMeshVertexFactoryUniformShaderParameters>::CreateUniformBufferImmediate(UniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
+	}
+}
+
+IMPLEMENT_VERTEX_FACTORY_PARAMETER_TYPE(FManualFetchInstancedStaticMeshVertexFactory, SF_Vertex, FManualFetchInstancedStaticMeshVertexFactoryShaderParameters);
+IMPLEMENT_VERTEX_FACTORY_TYPE_EX(FManualFetchInstancedStaticMeshVertexFactory, "/Engine/Private/LocalVertexFactory.ush", true, true, true, true, true, true, false);
+//@StarLight code - END GPU-Driven, Added by yanjianhong
