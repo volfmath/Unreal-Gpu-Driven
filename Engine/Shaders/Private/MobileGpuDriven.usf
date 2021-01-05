@@ -1,0 +1,24 @@
+#include "Common.ush"
+
+#define GROUP_TILE_SIZE 64
+
+struct ClusterData
+{
+    uint FirstRenderIndex;
+    uint LodBufferStartIndex;
+    uint InstanceCount;
+    float3 BoundCenter;
+    float3 BoundExtent;
+};
+
+//[input]
+StructuredBuffer<ClusterData> ClusterDataBuffer;
+
+//[output]
+RWStructuredBuffer<uint> SparseEntityBuffer;
+
+[numthreads(GROUP_TILE_SIZE, 1, 1)]
+void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
+{
+
+}

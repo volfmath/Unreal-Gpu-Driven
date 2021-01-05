@@ -32,6 +32,11 @@
 
 class ULightComponent;
 
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+struct FMeshEntity;
+struct FMobileGPUDrivenSystem;
+//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 extern TAutoConsoleVariable<float> CVarFoliageMinimumScreenSize;
 extern TAutoConsoleVariable<float> CVarFoliageLODDistanceScale;
 extern TAutoConsoleVariable<float> CVarRandomLODRange;
@@ -350,7 +355,6 @@ private:
 
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-
 struct FManualFetchInstancedStaticMeshDataType
 {
 	FRHIShaderResourceView* InstanceOriginSRV = nullptr;
@@ -682,7 +686,7 @@ public:
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	static bool UseMobileGPUDriven(UInstancedStaticMeshComponent* InComponent);
 	void SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent);
-	void SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const;
+	void SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch, const FMeshEntity& MeshEntity, FMobileGPUDrivenSystem* CurrentSystem) const;
 	//#TODO: No longer need DrawStaticElement unless VT
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 

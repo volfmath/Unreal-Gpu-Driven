@@ -98,15 +98,6 @@ static TAutoConsoleVariable<float> CVarRayTracingInstancesLowScaleCullRadius(
 	1000.0f, 
 	TEXT("Cull radius for small instances (default = 1000 (10m))"));
 
-//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
-	TEXT("r.Mobile.GpuDriven"),
-	1,
-	TEXT("Whether to allow gpudriven.\n"),
-	ECVF_Scalability
-);
-//@StarLight code - END GPU-Driven, Added by yanjianhong
-
 class FDummyFloatBuffer : public FVertexBufferWithSRV
 {
 public:
@@ -967,7 +958,10 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 		//check(Views.Num() == 1);
 	
 		const FSceneView* View = Views[0];
-		
+		auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
+		check(CurrentSystem);
+		const FMeshEntity& MeshEntity = CurrentSystem->GetMeshEntityByUniqueId(UniqueObjectId);
+
 		//阴影不需要IndirectDraw
 		if (View->GetDynamicMeshElementsShadowCullFrustum()) {
 			const int32 LODIndex = GetLOD(View);
@@ -979,14 +973,14 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 
 					check(LODIndex < InstancedRenderData.ManualFetchVertexFactories.Num());
 
-					MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex];
+					MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex]; //即使在shader中动态判断,但一个VS内的分支全部相同
 					MeshElement.bCanApplyViewModeOverrides = true;
 					MeshElement.bUseSelectionOutline = false; //决定渲染Hit的参数
 					MeshElement.bUseWireframeSelectionColoring = false;
 
 					const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 					FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
-					BatchElement0.UserData = (void*)&UserData_AllInstances;
+					BatchElement0.UserData = reinterpret_cast<void*>(const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData));
 					BatchElement0.bUserDataIsColorVertexBuffer = false;
 					BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
 					BatchElement0.UserIndex = 0; //Not needed used to Dithered
@@ -1016,14 +1010,14 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 
 						const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 						FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
-						BatchElement0.UserData = (void*)&UserData_AllInstances;
+						BatchElement0.UserData = reinterpret_cast<void*>(const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData));
 						BatchElement0.bUserDataIsColorVertexBuffer = false;
 						BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
 						BatchElement0.UserIndex = 0; //Not needed used to Dithered
 						BatchElement0.PrimitiveUniformBuffer = GetUniformBuffer();
 						BatchElement0.NumInstances = NumInstances;
 
-						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement);
+						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement, MeshEntity, CurrentSystem);
 						Collector.AddMesh(0, MeshElement);
 					}
 				}
@@ -1171,25 +1165,18 @@ void FInstancedStaticMeshSceneProxy::SetupProxy(UInstancedStaticMeshComponent* I
 }
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-
-void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch) const{
-
-	auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
-	if (CurrentSystem) {
-		IndirectDrawArgsAndStartIndex IndirectBufferParameters;
-		CurrentSystem->GetIndirectDrawArgsAndStartIndex(UniqueObjectId, IndirectBufferParameters);
-		uint32 IndirectArgsOffset = 0;
-		for (uint32 i = 0; i < static_cast<uint32>(LODIndex); ++i) {
-			const FStaticMeshLODResources& LODModel = RenderData->LODResources[i];
-			IndirectArgsOffset += LODModel.Sections.Num() * SLGPUDrivenParameter::IndirectCommandSize;
-		}
-		IndirectArgsOffset += SectionIndex * SLGPUDrivenParameter::IndirectCommandSize;
-
-		FMeshBatchElement& BatchElement0 = OutMeshBatch.Elements[0];
-		BatchElement0.NumPrimitives = 0;
-		BatchElement0.IndirectArgsBuffer = IndirectBufferParameters.IndirectArgsBuffer;
-		BatchElement0.IndirectArgsOffset = IndirectBufferParameters.IndirectArgsStartIndex + IndirectArgsOffset;
+void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch, const FMeshEntity& MeshEntity, FMobileGPUDrivenSystem* CurrentSystem) const{
+	uint32 IndirectArgsOffset = 0;
+	for (uint32 i = 0; i < static_cast<uint32>(LODIndex); ++i) {
+		const FStaticMeshLODResources& LODModel = RenderData->LODResources[i];
+		IndirectArgsOffset += LODModel.Sections.Num() * SLGPUDrivenParameter::IndirectCommandSize;
 	}
+	IndirectArgsOffset += SectionIndex * SLGPUDrivenParameter::IndirectCommandSize;
+
+	FMeshBatchElement& BatchElement0 = OutMeshBatch.Elements[0];
+	BatchElement0.NumPrimitives = 0;
+	BatchElement0.IndirectArgsBuffer = CurrentSystem->IndirectDrawCommandBuffer_GPU.Buffer;
+	BatchElement0.IndirectArgsOffset = MeshEntity.IndirectArgsStartIndex + IndirectArgsOffset;
 }
 
 void FInstancedStaticMeshSceneProxy::SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent) {
@@ -3585,9 +3572,9 @@ void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementSha
 	FRHIUniformBuffer* VertexFactoryUniformBuffer = static_cast<FRHIUniformBuffer*>(BatchElement.VertexFactoryUserData);
 	FLocalVertexFactoryShaderParametersBase::GetElementShaderBindingsBase(Scene, View, Shader, InputStreamType, FeatureLevel, VertexFactory, BatchElement, VertexFactoryUniformBuffer, ShaderBindings, VertexStreams);
 
-	const FInstancingUserData* InstancingUserData = (const FInstancingUserData*)BatchElement.UserData;
+	const FGpuDrivenInstancingUserData* InstancingUserData = (const FGpuDrivenInstancingUserData*)BatchElement.UserData;
 	const auto* InstancedVertexFactory = static_cast<const FManualFetchInstancedStaticMeshVertexFactory*>(VertexFactory);
-	const int32 InstanceOffsetValue = BatchElement.UserIndex;
+	//const int32 InstanceOffsetValue = BatchElement.UserIndex;
 
 	ShaderBindings.Add(Shader->GetUniformBufferParameter<FInstancedStaticMeshVertexFactoryUniformShaderParameters>(), InstancedVertexFactory->GetUniformBuffer());
 

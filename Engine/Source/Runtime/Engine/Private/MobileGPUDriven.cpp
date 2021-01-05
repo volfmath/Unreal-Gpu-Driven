@@ -2,6 +2,14 @@
 #include "InstancedStaticMesh.h"
 #include "StaticMeshResources.h"
 
+ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
+	TEXT("r.Mobile.GpuDriven"),
+	1,
+	TEXT("Whether to allow gpudriven.\n"),
+	ECVF_Scalability
+);
+
+
 //--------------------------------Static Function--------------------------------
 TMap<uint32, FMobileGPUDrivenSystem*> FMobileGPUDrivenSystem::GlobalWorldIndexToSystemMap;
 
@@ -20,10 +28,10 @@ void FMobileGPUDrivenSystem::RegisterEntity(UInstancedStaticMeshComponent* Insta
 	GlobalUniqueIdToSystemMap_GameThread.Emplace(UniqueObjectIndex, FoundSystem);
 
 	uint32 EntityIndex = FoundSystem->EntitiesComponents.Emplace(UniqueObjectIndex, InstanceComponent);
-	FoundSystem->ComponentToIndexMap_GameThread.Emplace(UniqueObjectIndex, EntityIndex);
+	FoundSystem->UniqueIdToEntityIndex_GameThread.Emplace(UniqueObjectIndex, EntityIndex);
 
 	//#TODO: Remove the parameter of PerInstanceRenderData, directly use InstanceComponent member
-	FMeshEntity SubmitToRenderThreadMeshEntity = FMeshEntity::CreateMeshEntity(InstanceComponent, InstanceComponent->PerInstanceRenderData);
+	FMeshEntity SubmitToRenderThreadMeshEntity = FMeshEntity::CreateMeshEntity(InstanceComponent);
 	ENQUEUE_RENDER_COMMAND(FRegisterEntityToGpuDriven)(
 		[RightValueMeshEntity{ MoveTemp(SubmitToRenderThreadMeshEntity) }, FoundSystem](FRHICommandList& RHICmdList)
 		{
@@ -32,7 +40,7 @@ void FMobileGPUDrivenSystem::RegisterEntity(UInstancedStaticMeshComponent* Insta
 	);
 
 	//MarkDirty
-	FoundSystem->MarkAllComponentsDirty();
+	//FoundSystem->MarkAllComponentsDirty();
 }
 
 //Return the index of the removed element
@@ -40,16 +48,16 @@ void FMobileGPUDrivenSystem::UnRegisterEntity(uint32 UniqueObjectIndex) {
 
 	//Only GameThread
 	auto FoundSystem = GlobalUniqueIdToSystemMap_GameThread.FindChecked(UniqueObjectIndex);
-	uint32 EntityIndex_GameThread = FoundSystem->ComponentToIndexMap_GameThread.FindChecked(UniqueObjectIndex);
+	uint32 EntityIndex_GameThread = FoundSystem->UniqueIdToEntityIndex_GameThread.FindChecked(UniqueObjectIndex);
 
 	//Set the last element index
 	auto& ToSwapComponent = FoundSystem->EntitiesComponents.Last();
-	uint32& ToSwapEntityIndex_GameThread = FoundSystem->ComponentToIndexMap_GameThread.FindChecked(ToSwapComponent.UniqueObjectId);
+	uint32& ToSwapEntityIndex_GameThread = FoundSystem->UniqueIdToEntityIndex_GameThread.FindChecked(ToSwapComponent.UniqueObjectId);
 	ToSwapEntityIndex_GameThread = EntityIndex_GameThread;
 
 	//Remove element
 	FoundSystem->EntitiesComponents.RemoveAtSwap(EntityIndex_GameThread);
-	FoundSystem->ComponentToIndexMap_GameThread.Remove(UniqueObjectIndex);
+	FoundSystem->UniqueIdToEntityIndex_GameThread.Remove(UniqueObjectIndex);
 	GlobalUniqueIdToSystemMap_GameThread.Remove(UniqueObjectIndex);
 
 	ENQUEUE_RENDER_COMMAND(FUnRegisterEntityToGpuDriven)(
@@ -60,7 +68,7 @@ void FMobileGPUDrivenSystem::UnRegisterEntity(uint32 UniqueObjectIndex) {
 	);
 
 	//MarkDirty
-	FoundSystem->MarkAllComponentsDirty();
+	//FoundSystem->MarkAllComponentsDirty();
 }
 
 void FMobileGPUDrivenSystem::RegisterEntity_RenderThread(FMeshEntity&& MeshEntity, FMobileGPUDrivenSystem* SceneSystemPtr)
@@ -71,30 +79,31 @@ void FMobileGPUDrivenSystem::RegisterEntity_RenderThread(FMeshEntity&& MeshEntit
 
 	FMobileGPUDrivenSystem* FoundSystem = SceneSystemPtr;
 	uint32 EntityIndex_RenderThread = FoundSystem->Entities.Emplace(MoveTemp(MeshEntity));
-	FoundSystem->ComponentToIndexMap_RenderThread.Emplace(MeshEntity.UniqueObjectId, EntityIndex_RenderThread);
+	FoundSystem->UniqueIdToEntityIndex_RenderThread.Emplace(MeshEntity.UniqueObjectId, EntityIndex_RenderThread);
 
 	//注册就更新, 因为AddStaticMesh是多线程的, 或者多线程锁?
-	FoundSystem->UpdateIndirectDrawCommandBuffer();
+	FoundSystem->UpdateAllGPUBuffer();
+
 }
 
 void FMobileGPUDrivenSystem::UnRegisterEntity_RenderThread(uint32 UniqueObjectIndex) {
 
 	//Only RenderThread
 	auto FoundSystem = GlobalUniqueIdToSystemMap_RenderThread.FindChecked(UniqueObjectIndex);
-	uint32 EntityIndex_RenderThread = FoundSystem->ComponentToIndexMap_RenderThread.FindChecked(UniqueObjectIndex);
+	uint32 EntityIndex_RenderThread = FoundSystem->UniqueIdToEntityIndex_RenderThread.FindChecked(UniqueObjectIndex);
 	uint32 UniqueWorldId = FoundSystem->Entities[EntityIndex_RenderThread].UniqueWorldId;
 
 	//Set the ID of the last element
 	auto& ToSwapEntity = FoundSystem->Entities.Last();
-	uint32& ToSwapEntityIndex_RenderThread = FoundSystem->ComponentToIndexMap_RenderThread.FindChecked(ToSwapEntity.UniqueObjectId);
+	uint32& ToSwapEntityIndex_RenderThread = FoundSystem->UniqueIdToEntityIndex_RenderThread.FindChecked(ToSwapEntity.UniqueObjectId);
 	ToSwapEntityIndex_RenderThread = EntityIndex_RenderThread;
 
 	//remove element
 	FoundSystem->Entities.RemoveAtSwap(EntityIndex_RenderThread);
-	FoundSystem->ComponentToIndexMap_RenderThread.Remove(UniqueObjectIndex);
+	FoundSystem->UniqueIdToEntityIndex_RenderThread.Remove(UniqueObjectIndex);
 	GlobalUniqueIdToSystemMap_RenderThread.Remove(UniqueObjectIndex);
 
-	FoundSystem->UpdateIndirectDrawCommandBuffer();
+	FoundSystem->UpdateAllGPUBuffer();
 
 	if (FoundSystem->Entities.Num() == 0) {
 		GlobalWorldIndexToSystemMap.Remove(UniqueWorldId); //World容器生命周期终结处
@@ -148,7 +157,8 @@ FMeshEntity::FMeshEntity
 	TArray<uint32>&& InSectionIndexCount,
 	TArray<uint32>&& InSectionFirstIndex,
 	TArray<float>&& InScreenLODs,
-	TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> InPerInstanceRenderData
+	TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> InPerInstanceRenderData,
+	const FGpuDrivenInstancingUserData& UserData
 )
 	: NumLod(InNumLod)
 	, NumDrawElement(InNumDrawElement)
@@ -160,6 +170,8 @@ FMeshEntity::FMeshEntity
 	, SectionFirstIndex(MoveTemp(InSectionFirstIndex))
 	, ScreenLODs(MoveTemp(InScreenLODs))
 	, PerInstanceRenderData(InPerInstanceRenderData)
+	, IndirectArgsStartIndex(0)
+	, GpuDriven_UserData(UserData)
 {
 	check(PerInstanceRenderData.IsValid());
 }
@@ -175,6 +187,8 @@ FMeshEntity::FMeshEntity(const FMeshEntity& CopyMeshEntity)
 	, SectionFirstIndex(CopyMeshEntity.SectionFirstIndex)
 	, ScreenLODs(CopyMeshEntity.ScreenLODs)
 	, PerInstanceRenderData(CopyMeshEntity.PerInstanceRenderData)
+	, IndirectArgsStartIndex(CopyMeshEntity.IndirectArgsStartIndex)
+	, GpuDriven_UserData(CopyMeshEntity.GpuDriven_UserData)
 {
 	check(PerInstanceRenderData.IsValid());
 }
@@ -190,18 +204,20 @@ FMeshEntity::FMeshEntity(FMeshEntity&& CopyMeshEntity)
 	, SectionFirstIndex(MoveTemp(CopyMeshEntity.SectionFirstIndex))
 	, ScreenLODs(MoveTemp(CopyMeshEntity.ScreenLODs))
 	, PerInstanceRenderData(CopyMeshEntity.PerInstanceRenderData)
+	, IndirectArgsStartIndex(CopyMeshEntity.IndirectArgsStartIndex)
+	, GpuDriven_UserData(CopyMeshEntity.GpuDriven_UserData)
 {
 	check(PerInstanceRenderData.IsValid());
 }
 
 
-FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* InstanceComponent, TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> InPerInstanceRenderData) {
+FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* InstanceComponent) {
 
 	check(IsInGameThread());
 
 	//#TODO: Use Cluster
 	//InstanceBuffer存在渲染资源,但像数量或者Instance数据都在FStaticMeshInstanceData结构, 即游戏线程数据中, 所以这里直接使用InPerInstanceRenderData是安全的, 除了渲染资源
-	uint32 NumRenderCluster = InPerInstanceRenderData->InstanceBuffer.GetNumInstances();
+	uint32 NumRenderCluster = InstanceComponent->PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 
 	UStaticMesh* StaticMesh = InstanceComponent->GetStaticMesh();
 	const auto& StaticMeshRenderDta = StaticMesh->RenderData;
@@ -233,7 +249,12 @@ FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* Instanc
 		NumDrawElement += NumSection;
 	}
 
-	return FMeshEntity(NumLod, NumDrawElement, NumRenderCluster, UniqueObjectId, UniqueWorldId, MeshBounds, MoveTemp(SectionIndexCount), MoveTemp(SectionFirstIndex), MoveTemp(ScreenLODs), InPerInstanceRenderData);
+	FGpuDrivenInstancingUserData NewUserData = FGpuDrivenInstancingUserData(InstanceComponent);
+
+	return FMeshEntity(
+		NumLod, NumDrawElement, NumRenderCluster, UniqueObjectId, UniqueWorldId, MeshBounds, 
+		MoveTemp(SectionIndexCount), MoveTemp(SectionFirstIndex), MoveTemp(ScreenLODs), 
+		InstanceComponent->PerInstanceRenderData, NewUserData);
 }
 
 FBoxSphereBounds FMeshEntity::GetClusterBounds(int32 ClusterRenderIndex) const {
@@ -264,109 +285,108 @@ FMobileGPUDrivenSystem::~FMobileGPUDrivenSystem() {
 
 }
 
-void FMobileGPUDrivenSystem::UpdateGlobalGPUBuffer() {
+void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 
-	//if (!bGPUDataDirty)
-	//	return;
-
-	//if (IndirectDrawCommandBuffer_GPU.NumBytes != 0) {
-	//	IndirectDrawCommandBuffer_GPU.Release();
-	//}
-	//if (ClusterMappingAndBoundBuffer_GPU.NumBytes != 0) {
-	//	ClusterMappingAndBoundBuffer_GPU.Release();
-	//}
-	//if (LodBuffer_GPU.NumBytes != 0) {
-	//	LodBuffer_GPU.Release();
-	//}
-
-	////#TODO: TaskGraph
-	//TArray<FDrawIndirectCommandArgs_CPU> IndirectDrawCommandBuffer_CPU;
-	//TArray<FClusterMappingAndBound_CPU> ClusterMappingAndBoundBuffer_CPU;
-	//TArray<FLodBuffer_CPU> LodBuffer_CPU;
-	//uint32 LodBufferOffset = 0;
-
-	//for (const auto& ProxyEntity : Entities) {
-	//	
-
-
-	//	int32 ClusterStartIndex = ClusterMappingAndBoundBuffer_CPU.Num();
-	//	int32 LocalRenderIndex = 0;
-	//	const FBoxSphereBounds& MeshBound = ProxyEntity.MeshBound;
-	//	ClusterMappingAndBoundBuffer_CPU.AddZeroed(ProxyEntity.NumRenderCluster);
-	//	for (int32 ClusterIndex = ClusterStartIndex; ClusterIndex < ClusterMappingAndBoundBuffer_CPU.Num(); ++ClusterIndex) {
-	//		int32 FirstClusterRenderIndex = LocalRenderIndex; //#TODO: ClusterNodes.FirstInstance
-	//		const auto& ClusterBound = ProxyEntity.GetClusterBounds(FirstClusterRenderIndex, MeshBound);
-
-	//		auto& ClusterMappingAndBoundBuffer = ClusterMappingAndBoundBuffer_CPU[ClusterIndex];
-	//		ClusterMappingAndBoundBuffer.LodBufferStartIndex = LodBufferOffset;
-	//		ClusterMappingAndBoundBuffer.FirstRenderIndex = FirstClusterRenderIndex;
-	//		ClusterMappingAndBoundBuffer.BoundCenter = ClusterBound.Origin;
-	//		ClusterMappingAndBoundBuffer.BoundExtent = ClusterBound.BoxExtent;
-
-	//		LocalRenderIndex += 1;
-	//	}
-
-	//	int32 StartLodBufferIndex = LodBuffer_CPU.Num();
-	//	int32 LocalLodBufferIndex = 0;
-	//	LodBuffer_CPU.AddZeroed(ProxyEntity.NumLod);
-	//	for (int32 LodBufferIndex = StartLodBufferIndex; LodBufferIndex < LodBuffer_CPU.Num(); ++LodBufferIndex) {
-	//		auto& ClusterLod = LodBuffer_CPU[LodBufferIndex];
-	//		ClusterLod.CurLodScreenSize = ProxyEntity.ScreenLODs[LocalLodBufferIndex];
-
-	//		LocalLodBufferIndex += 1;
-	//	}
-
-	//	LodBufferOffset += ProxyEntity.NumLod;
-	//}
-
-
-	////Write data to GPU
-	//{
-	//	ClusterMappingAndBoundBuffer_GPU.Initialize(sizeof(FClusterMappingAndBound_CPU), ClusterMappingAndBoundBuffer_CPU.Num(), BUF_Static);
-	//	void* MappingAndBoundData = RHILockStructuredBuffer(ClusterMappingAndBoundBuffer_GPU.Buffer, 0, ClusterMappingAndBoundBuffer_GPU.NumBytes, RLM_WriteOnly);
-	//	FMemory::Memcpy(MappingAndBoundData, ClusterMappingAndBoundBuffer_CPU.GetData(), ClusterMappingAndBoundBuffer_GPU.NumBytes);
-	//	RHIUnlockStructuredBuffer(ClusterMappingAndBoundBuffer_GPU.Buffer);
-
-	//	LodBuffer_GPU.Initialize(sizeof(FLodBuffer_CPU), LodBuffer_CPU.Num(), BUF_Static);
-	//	void* LodBufferData = RHILockStructuredBuffer(LodBuffer_GPU.Buffer, 0, LodBuffer_GPU.NumBytes, RLM_WriteOnly);
-	//	FMemory::Memcpy(LodBufferData, LodBuffer_CPU.GetData(), LodBuffer_GPU.NumBytes);
-	//	RHIUnlockStructuredBuffer(LodBuffer_GPU.Buffer);
-	//}
-
-	//bGPUDataDirty = false;
-}
-
-void FMobileGPUDrivenSystem::UpdateIndirectDrawCommandBuffer() {
-
-	if (Entities.Num() == 0) {
-		return;
-	}
-
-	TArray<FDrawIndirectCommandArgs_CPU> IndirectDrawCommandBuffer_CPU;
 	IndirectDrawCommandBuffer_GPU.Release();
-	for (const auto& ProxyEntity : Entities) {
-		check(ProxyEntity.NumDrawElement == ProxyEntity.SectionFirstIndex.Num() && ProxyEntity.NumDrawElement == ProxyEntity.SectionIndexCount.Num());
-		int32 StartDrawCommandIndex = IndirectDrawCommandBuffer_CPU.Num();
-		int32 SectionBufferIndex = 0;
-		IndirectDrawCommandBuffer_CPU.AddZeroed(ProxyEntity.NumDrawElement);
-		for (int32 DrawElementIndex = StartDrawCommandIndex; DrawElementIndex < IndirectDrawCommandBuffer_CPU.Num(); ++DrawElementIndex) {
-			auto& DrawCommandBuffer = IndirectDrawCommandBuffer_CPU[DrawElementIndex];
-			DrawCommandBuffer.IndexCount = ProxyEntity.SectionIndexCount[SectionBufferIndex];
-			DrawCommandBuffer.InstanceCount = ProxyEntity.NumRenderCluster;
-			DrawCommandBuffer.FirstIndex = ProxyEntity.SectionFirstIndex[SectionBufferIndex];
-			DrawCommandBuffer.VertexOffset = 0;
-			DrawCommandBuffer.FirstInstance = 0; //GPU Write
+	LodBuffer_GPU.Release();
+	ClusterData_GPU.Release();
+	SparseClusterBuffer_GPU.Release();
+	ClusterCount = 0;
 
-			SectionBufferIndex += 1;
+	//#TODO: TaskGraph
+	TArray<FDrawIndirectCommandArgs_CPU> IndirectDrawCommandBuffer_CPU;
+	TArray<FClusterData_CPU> ClusterData_CPU;
+	TArray<FEntityLodBuffer_CPU> LodBuffer_CPU;
+	uint32 LodBufferOffset = 0;
+	uint32 CurSparseEntityBufferIndex = 0;
+
+	for (auto& ProxyEntity : Entities) {
+
+		//about ClusterBuffer
+		{
+			ProxyEntity.GpuDriven_UserData.SparseClusterBufferIndex = CurSparseEntityBufferIndex; //Set SparseEntityBufferIndex
+			ProxyEntity.GpuDriven_UserData.ClusterInstanceCount = 1; //#TODO: FInstanceClusterNode.ConstInstanceCount
+
+			int32 ClusterStartIndex = ClusterData_CPU.Num();
+			int32 LocalRenderIndex = 0;
+			const FBoxSphereBounds& MeshBound = ProxyEntity.MeshBound;
+			ClusterData_CPU.AddZeroed(ProxyEntity.NumRenderCluster); //#TODO: ClusterNodes.Num()
+			for (int32 ClusterIndex = ClusterStartIndex; ClusterIndex < ClusterData_CPU.Num(); ++ClusterIndex) {
+				int32 FirstClusterRenderIndex = LocalRenderIndex; //#TODO: FInstanceClusterNode.FirstInstance
+				const auto& ClusterBound = ProxyEntity.GetClusterBounds(FirstClusterRenderIndex, MeshBound);
+
+				auto& ClusterDataBuffer = ClusterData_CPU[ClusterIndex];
+				ClusterDataBuffer.FirstRenderIndex = FirstClusterRenderIndex;
+				ClusterDataBuffer.LodBufferStartIndex = LodBufferOffset;
+				ClusterDataBuffer.InstanceCount = 1; //#TODO: FInstanceClusterNode.InstanceCount
+				ClusterDataBuffer.BoundCenter = ClusterBound.Origin;
+				ClusterDataBuffer.BoundExtent = ClusterBound.BoxExtent;
+				
+				LocalRenderIndex += 1;
+			}
+
+			LodBufferOffset += ProxyEntity.NumLod;
+			CurSparseEntityBufferIndex += ProxyEntity.NumLod * ProxyEntity.NumRenderCluster; //#TODO: ClusterNodes.Num()
+			ClusterCount += ProxyEntity.NumRenderCluster;
+		}
+
+		//about LodBuffer
+		{
+			int32 StartLodBufferIndex = LodBuffer_CPU.Num();
+			int32 LocalLodBufferIndex = 0;
+			LodBuffer_CPU.AddZeroed(ProxyEntity.NumLod);
+			for (int32 LodBufferIndex = StartLodBufferIndex; LodBufferIndex < LodBuffer_CPU.Num(); ++LodBufferIndex) {
+				auto& ClusterLod = LodBuffer_CPU[LodBufferIndex];
+				ClusterLod.CurLodScreenSize = ProxyEntity.ScreenLODs[LocalLodBufferIndex];
+
+				LocalLodBufferIndex += 1;
+			}
+		}
+
+		//about IndirectDrawCommandeBuffer
+		{
+			checkSlow(ProxyEntity.NumDrawElement == ProxyEntity.SectionFirstIndex.Num() && ProxyEntity.NumDrawElement == ProxyEntity.SectionIndexCount.Num());
+
+			//Set IndirectStartIndex
+			ProxyEntity.IndirectArgsStartIndex = IndirectDrawCommandBuffer_CPU.Num();
+
+			int32 StartDrawCommandIndex = IndirectDrawCommandBuffer_CPU.Num();
+			int32 SectionBufferIndex = 0;
+			IndirectDrawCommandBuffer_CPU.AddZeroed(ProxyEntity.NumDrawElement);
+			for (int32 DrawElementIndex = StartDrawCommandIndex; DrawElementIndex < IndirectDrawCommandBuffer_CPU.Num(); ++DrawElementIndex) {
+				auto& DrawCommandBuffer = IndirectDrawCommandBuffer_CPU[DrawElementIndex];
+				DrawCommandBuffer.IndexCount = ProxyEntity.SectionIndexCount[SectionBufferIndex];
+				DrawCommandBuffer.InstanceCount = ProxyEntity.NumRenderCluster;
+				DrawCommandBuffer.FirstIndex = ProxyEntity.SectionFirstIndex[SectionBufferIndex];
+				DrawCommandBuffer.VertexOffset = 0;
+				DrawCommandBuffer.FirstInstance = 0; //GPU Write
+
+				SectionBufferIndex += 1;
+			}
 		}
 	}
 
-	IndirectDrawCommandBuffer_GPU.Initialize(sizeof(uint32), IndirectDrawCommandBuffer_CPU.Num() * SLGPUDrivenParameter::IndirectBufferElementSize, PF_R32_UINT, BUF_DrawIndirect | BUF_Static);
-	void* IndirectBufferData = RHILockVertexBuffer(IndirectDrawCommandBuffer_GPU.Buffer, 0, IndirectDrawCommandBuffer_GPU.NumBytes, RLM_WriteOnly);
-	FMemory::Memcpy(IndirectBufferData, IndirectDrawCommandBuffer_CPU.GetData(), IndirectDrawCommandBuffer_GPU.NumBytes);
-	RHIUnlockVertexBuffer(IndirectDrawCommandBuffer_GPU.Buffer);
-}
+	//Write data to GPU
+	if(Entities.Num() != 0)
+	{
+		ClusterData_GPU.Initialize(sizeof(FClusterData_CPU), ClusterData_CPU.Num(), BUF_Static);
+		void* MappingAndBoundData = RHILockStructuredBuffer(ClusterData_GPU.Buffer, 0, ClusterData_GPU.NumBytes, RLM_WriteOnly);
+		FMemory::Memcpy(MappingAndBoundData, ClusterData_CPU.GetData(), ClusterData_GPU.NumBytes);
+		RHIUnlockStructuredBuffer(ClusterData_GPU.Buffer);
 
+		LodBuffer_GPU.Initialize(sizeof(FEntityLodBuffer_CPU), LodBuffer_CPU.Num(), BUF_Static);
+		void* LodBufferData = RHILockStructuredBuffer(LodBuffer_GPU.Buffer, 0, LodBuffer_GPU.NumBytes, RLM_WriteOnly);
+		FMemory::Memcpy(LodBufferData, LodBuffer_CPU.GetData(), LodBuffer_GPU.NumBytes);
+		RHIUnlockStructuredBuffer(LodBuffer_GPU.Buffer);
+
+		IndirectDrawCommandBuffer_GPU.Initialize(sizeof(uint32), IndirectDrawCommandBuffer_CPU.Num() * SLGPUDrivenParameter::IndirectBufferElementSize, PF_R32_UINT, BUF_DrawIndirect | BUF_Static);
+		void* IndirectBufferData = RHILockVertexBuffer(IndirectDrawCommandBuffer_GPU.Buffer, 0, IndirectDrawCommandBuffer_GPU.NumBytes, RLM_WriteOnly);
+		FMemory::Memcpy(IndirectBufferData, IndirectDrawCommandBuffer_CPU.GetData(), IndirectDrawCommandBuffer_GPU.NumBytes);
+		RHIUnlockVertexBuffer(IndirectDrawCommandBuffer_GPU.Buffer);
+
+		SparseClusterBuffer_GPU.Initialize(sizeof())
+	}
+}
 
 //#TODO: GPU Driven统一走Dynamic收集MeshDrawCommand, 可移除
 void FMobileGPUDrivenSystem::MarkAllComponentsDirty(){
@@ -382,15 +402,7 @@ void FMobileGPUDrivenSystem::MarkAllComponentsDirty(){
 	}
 }
 
-
-void FMobileGPUDrivenSystem::GetIndirectDrawArgsAndStartIndex(uint32 UniqueObjectId, IndirectDrawArgsAndStartIndex& IndirectBuffer) const{
-	//#TODO: Cache IndirectArgsStartIndex
-	const uint32 EntityIndex_RenderThread = ComponentToIndexMap_RenderThread.FindChecked(UniqueObjectId);
-
-	uint32 DrawStartIndex = 0;
-	for (uint32 i = 0; i < EntityIndex_RenderThread; ++i) {
-		DrawStartIndex += Entities[i].NumDrawElement;
-	}
-	IndirectBuffer.IndirectArgsBuffer = IndirectDrawCommandBuffer_GPU.Buffer;
-	IndirectBuffer.IndirectArgsStartIndex = DrawStartIndex * SLGPUDrivenParameter::IndirectCommandSize;
+const FMeshEntity& FMobileGPUDrivenSystem::GetMeshEntityByUniqueId(uint32 UniqueObjectIndex) const {
+	const uint32 EntityIndex_RenderThread = UniqueIdToEntityIndex_RenderThread.FindChecked(UniqueObjectIndex);
+	return Entities[EntityIndex_RenderThread];
 }
