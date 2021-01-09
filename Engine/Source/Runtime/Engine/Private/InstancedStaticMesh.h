@@ -66,7 +66,7 @@ public:
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	/** Default constructor. */
-	FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess, bool InUseGpuDriven);
+	FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess);
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	/** Destructor. */
@@ -130,10 +130,6 @@ public:
 
 	/** Keep CPU copy of instance data*/
 	bool RequireCPUAccess;
-
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	bool bUseGpuDriven;
-	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 private:
 	class FInstanceOriginBuffer : public FVertexBuffer
@@ -468,6 +464,8 @@ public:
 		FLocalVertexFactoryShaderParametersBase::Bind(ParameterMap);
 		InstancingFadeOutParamsParameter.Bind(ParameterMap, TEXT("InstancingFadeOutParams"));
 		InstancingOffsetParameter.Bind(ParameterMap, TEXT("InstancingOffset")); //Stay for compatibility 
+		InstanceToRenderStartIndexAndIsShadow.Bind(ParameterMap, TEXT("InstanceToRenderStartIndexAndIsShadow"));
+		InstanceToRenderIndexBufferSRV.Bind(ParameterMap, TEXT("InstanceToRenderIndexBufferSRV"));
 	}
 
 	void GetElementShaderBindings(
@@ -483,9 +481,10 @@ public:
 	) const;
 
 private:
-
 	LAYOUT_FIELD(FShaderParameter, InstancingFadeOutParamsParameter)
 	LAYOUT_FIELD(FShaderParameter, InstancingOffsetParameter);
+	LAYOUT_FIELD(FShaderParameter, InstanceToRenderStartIndexAndIsShadow);
+	LAYOUT_FIELD(FShaderResourceParameter, InstanceToRenderIndexBufferSRV);
 };
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -499,8 +498,8 @@ struct FPerInstanceRenderData
 	// Should be always constructed on main thread
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess, bool InUseGpuDriven);
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess);
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 	~FPerInstanceRenderData();
 
 	/**
@@ -529,9 +528,6 @@ struct FPerInstanceRenderData
 /*-----------------------------------------------------------------------------
 	FInstancedStaticMeshRenderData
 -----------------------------------------------------------------------------*/
-//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-
-//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 class FInstancedStaticMeshRenderData
 {
@@ -649,7 +645,7 @@ public:
 	FInstancedStaticMeshSceneProxy(UInstancedStaticMeshComponent* InComponent, ERHIFeatureLevel::Type InFeatureLevel)
 	:	FStaticMeshSceneProxy(InComponent, true)
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	,   bUseGpuDriven(InComponent->PerInstanceRenderData->InstanceBuffer.bUseGpuDriven)
+	,   bUseGpuDriven(InComponent->GetGpuDrivenIsValid())
 	,   UniqueObjectId(0xFFFFFFFF)
 	,	StaticMesh(InComponent->GetStaticMesh())
 	,	InstancedRenderData(InComponent, bUseGpuDriven, InFeatureLevel)

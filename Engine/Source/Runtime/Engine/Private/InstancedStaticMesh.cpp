@@ -271,10 +271,9 @@ void FInstanceUpdateCmdBuffer::Reset()
 	NumEdits = 0;
 }
 
-FStaticMeshInstanceBuffer::FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess, bool InUseGpuDriven)
+FStaticMeshInstanceBuffer::FStaticMeshInstanceBuffer(ERHIFeatureLevel::Type InFeatureLevel, bool InRequireCPUAccess)
 	: FRenderResource(InFeatureLevel)
 	, RequireCPUAccess(InRequireCPUAccess)
-	, bUseGpuDriven(InUseGpuDriven)
 {
 }
 
@@ -456,11 +455,7 @@ void FStaticMeshInstanceBuffer::CreateVertexBuffer(FResourceArrayInterface* InRe
 	FRHIResourceCreateInfo CreateInfo(InResourceArray);
 	OutVertexBufferRHI = RHICreateVertexBuffer(InResourceArray->GetResourceDataSize(), InUsage, CreateInfo);
 	
-	if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform)
-		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		|| bUseGpuDriven
-		//@StarLight code - END GPU-Driven, Added by yanjianhong
-		)
+	if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform))
 	{
 		OutInstanceSRV = RHICreateShaderResourceView(OutVertexBufferRHI, InStride, InFormat);
 	}
@@ -531,21 +526,32 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 void FStaticMeshInstanceBuffer::BindManualFetchVertexBuffer(const class FVertexFactory* VertexFactory, struct FManualFetchInstancedStaticMeshDataType& InstancedStaticMeshData) const{
 
-	check(bUseGpuDriven);
+	if (InstanceData->GetNumInstances()){
+		if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform)) {
+			check(InstanceOriginSRV);
+			check(InstanceTransformSRV);
+			check(InstanceLightmapSRV);
+			check(InstanceCustomDataSRV); // Should not be nullptr, but can be assigned a dummy buffer
 
-	if (InstanceData->GetNumInstances())
-	{
-		check(InstanceOriginSRV);
-		check(InstanceTransformSRV);
-		check(InstanceLightmapSRV);
-		check(InstanceCustomDataSRV); // Should not be nullptr, but can be assigned a dummy buffer
+			InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
+			InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
+			InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
+			InstancedStaticMeshData.InstanceCustomDataSRV = InstanceCustomDataSRV;
+			InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
+		}
+		else {
+			InstancedStaticMeshData.InstanceOriginSRV = RHICreateShaderResourceView(InstanceOriginBuffer.VertexBufferRHI, 16, PF_A32B32G32R32F);
+			InstancedStaticMeshData.InstanceTransformSRV = RHICreateShaderResourceView(InstanceTransformBuffer.VertexBufferRHI, InstanceData->GetTranslationUsesHalfs() ? 8 : 16, InstanceData->GetTranslationUsesHalfs() ? PF_FloatRGBA : PF_A32B32G32R32F);
+			InstancedStaticMeshData.InstanceLightmapSRV = RHICreateShaderResourceView(InstanceLightmapBuffer.VertexBufferRHI, 8, PF_R16G16B16A16_SNORM);
+			if (InstanceData->GetNumCustomDataFloats() > 0) {
+				InstancedStaticMeshData.InstanceCustomDataSRV = RHICreateShaderResourceView(InstanceCustomDataBuffer.VertexBufferRHI, 4, PF_R32_FLOAT);
+			}
+			else {
+				InstancedStaticMeshData.InstanceCustomDataSRV = GDummyFloatBuffer.ShaderResourceViewRHI;
+			}
+			InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
+		}
 	}
-
-	InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
-	InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
-	InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
-	InstancedStaticMeshData.InstanceCustomDataSRV = InstanceCustomDataSRV;
-	InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
 }
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -896,11 +902,9 @@ void FInstancedStaticMeshRenderData::InitVertexFactories()
 }
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
-FPerInstanceRenderData::FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess, bool InUseGpuDriven)
+FPerInstanceRenderData::FPerInstanceRenderData(FStaticMeshInstanceData& Other, ERHIFeatureLevel::Type InFeaureLevel, bool InRequireCPUAccess)
 	: ResourceSize(InRequireCPUAccess ? Other.GetResourceSize() : 0)
-//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	, InstanceBuffer(InFeaureLevel, InRequireCPUAccess, InUseGpuDriven)
-//@StarLight code - END GPU-Driven, Added by yanjianhong
+	, InstanceBuffer(InFeaureLevel, InRequireCPUAccess)
 {
 	InstanceBuffer.InitFromPreallocatedData(Other);
 	InstanceBuffer_GameThread = InstanceBuffer.InstanceData;
@@ -962,7 +966,7 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 		check(CurrentSystem);
 		const FMeshEntity& MeshEntity = CurrentSystem->GetMeshEntityByUniqueId(UniqueObjectId);
 
-		//阴影不需要IndirectDraw
+		//让阴影走原始流程,创建两个VertexFactory?
 		if (View->GetDynamicMeshElementsShadowCullFrustum()) {
 			const int32 LODIndex = GetLOD(View);
 			const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
@@ -980,7 +984,9 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 
 					const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 					FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
-					BatchElement0.UserData = reinterpret_cast<void*>(const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData));
+					auto UserDataPtr = const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData);
+					UserDataPtr->bIsShadow = true;
+					BatchElement0.UserData = reinterpret_cast<void*>(UserDataPtr);
 					BatchElement0.bUserDataIsColorVertexBuffer = false;
 					BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
 					BatchElement0.UserIndex = 0; //Not needed used to Dithered
@@ -1010,7 +1016,9 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 
 						const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 						FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
-						BatchElement0.UserData = reinterpret_cast<void*>(const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData));
+						auto UserDataPtr = const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData);
+						UserDataPtr->bIsShadow = false;
+						BatchElement0.UserData = reinterpret_cast<void*>(UserDataPtr);
 						BatchElement0.bUserDataIsColorVertexBuffer = false;
 						BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
 						BatchElement0.UserIndex = 0; //Not needed used to Dithered
@@ -1560,6 +1568,10 @@ UInstancedStaticMeshComponent::UInstancedStaticMeshComponent(const FObjectInitia
 	BodyInstance.bSimulatePhysics = false;
 
 	bDisallowMeshPaintPerInstance = true;
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	bGpuDrivenIsValid = false;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
 UInstancedStaticMeshComponent::UInstancedStaticMeshComponent(FVTableHelper& Helper)
@@ -2158,19 +2170,6 @@ void UInstancedStaticMeshComponent::ReleasePerInstanceRenderData()
 {
 	if (PerInstanceRenderData.IsValid())
 	{
-		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		//与PerInstanceRenderData生命周期相同,不会重复释放
-
-		//查询是否注册
-		uint32 UniqueObjectId = GetUniqueID();
-		auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId);
-		if (CurrentSystem) {
-			FMobileGPUDrivenSystem::UnRegisterEntity(UniqueObjectId);
-		}
-
-		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-
-
 		typedef TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> FPerInstanceRenderDataPtr;
 
 		PerInstanceRenderData->HitProxies.Empty();
@@ -3015,13 +3014,9 @@ void UInstancedStaticMeshComponent::InitPerInstanceRenderData(bool InitializeFro
 
 	bool KeepInstanceBufferCPUAccess = GIsEditor || InRequireCPUAccess || ComponentRequestsCPUAccess(this, FeatureLevel);
 
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	const bool bUseGpuDriven = FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this) && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World);
-	//@StarLight code - END GPU-Driven, Added by yanjianhong
-
 	if (InSharedInstanceBufferData != nullptr)
 	{
-		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(*InSharedInstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess, bUseGpuDriven));
+		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(*InSharedInstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess));
 	}
 	else
 	{
@@ -3035,17 +3030,9 @@ void UInstancedStaticMeshComponent::InitPerInstanceRenderData(bool InitializeFro
 			BuildRenderData(InstanceBufferData, HitProxies);
 		}
 			
-		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(InstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess, bUseGpuDriven));
+		PerInstanceRenderData = MakeShareable(new FPerInstanceRenderData(InstanceBufferData, FeatureLevel, KeepInstanceBufferCPUAccess));
 		PerInstanceRenderData->HitProxies = MoveTemp(HitProxies);
 	}
-
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	/*const bool bUseGpuDriven = CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && FMobileGPUDrivenSystem::IsGPUDrivenWorld(World);*/
-	if (bUseGpuDriven) {
-		//Just register
-		FMobileGPUDrivenSystem::RegisterEntity(this);
-	}
-	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 }
 
 void UInstancedStaticMeshComponent::OnComponentCreated()
@@ -3556,6 +3543,44 @@ void FInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings
 
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+void UInstancedStaticMeshComponent::OnRegister() {
+	Super::OnRegister();
+
+	//Because Transform information is updated in OnRegister
+	bool bIsValidObject = !HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject);
+	ERHIFeatureLevel::Type FeatureLevel = GetWorld()->FeatureLevel.GetValue();
+	const bool bUseGpuDriven = bIsValidObject && (FeatureLevel == ERHIFeatureLevel::Type::ES3_1) && FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this) && FMobileGPUDrivenSystem::IsGPUDrivenWorld(GetWorld());
+	if (bUseGpuDriven) {
+		SetGpuDrivenIsValid(true);
+		BuildGpuDrivenCluster();
+		FMobileGPUDrivenSystem::RegisterEntity(this);
+	}
+}
+
+void UInstancedStaticMeshComponent::OnUnregister() {
+
+	uint32 UniqueObjectId = GetUniqueID();
+	auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId);
+	if (CurrentSystem) {
+		SetGpuDrivenIsValid(false);
+		uint32 UniqueWorldId = GetWorld()->GetUniqueID();
+		FMobileGPUDrivenSystem::UnRegisterEntity(UniqueObjectId, UniqueWorldId);
+	}
+	Super::OnUnregister();
+}
+
+void UInstancedStaticMeshComponent::BuildGpuDrivenCluster() {
+	GpuDrivenCluster = MakeShared<TArray<FGpuDrivenCluster>, ESPMode::ThreadSafe>();
+	GpuDrivenCluster->Empty(PerInstanceSMData.Num());
+	FBoxSphereBounds RenderBounds = GetStaticMesh()->GetBounds();
+	const FTransform& ComponentTransform = GetComponentTransform();
+	for (int32 i = 0; i < PerInstanceSMData.Num(); ++i) {
+		const FTransform InstanceToWorld = FTransform(PerInstanceSMData[i].Transform) * ComponentTransform;
+		const FBoxSphereBounds ClusterBound = RenderBounds.TransformBy(InstanceToWorld);
+		GpuDrivenCluster->Emplace(i, 1, ClusterBound.Origin, ClusterBound.BoxExtent);
+	}
+}
+
 void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings(
 	const class FSceneInterface* Scene,
 	const FSceneView* View,
@@ -3577,6 +3602,10 @@ void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementSha
 	//const int32 InstanceOffsetValue = BatchElement.UserIndex;
 
 	ShaderBindings.Add(Shader->GetUniformBufferParameter<FInstancedStaticMeshVertexFactoryUniformShaderParameters>(), InstancedVertexFactory->GetUniformBuffer());
+
+	FIntPoint InstanceToRenderStartIndexAndIsShadowParameter = FIntPoint(InstancingUserData->InstanceToRenderStartIndex, InstancingUserData->bIsShadow);
+	ShaderBindings.Add(InstanceToRenderStartIndexAndIsShadow, InstanceToRenderStartIndexAndIsShadowParameter);	
+	ShaderBindings.Add(InstanceToRenderIndexBufferSRV, InstancingUserData->InstanceToRenderIndexBufferSRV);
 
 	if (InstancingFadeOutParamsParameter.IsBound())
 	{

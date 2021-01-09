@@ -2,23 +2,172 @@
 
 #define GROUP_TILE_SIZE 64
 
-struct ClusterData
+//[Output]
+RWBuffer<uint> ClearUAV;
+[numthreads(GROUP_TILE_SIZE, 1, 1)]
+void ClearComputeFieldCS(uint DispatchThreadId : SV_DispatchThreadID)
 {
+    ClearUAV[DispatchThreadId] = 0;
+}
+
+struct ClusterInputData
+{   
     uint FirstRenderIndex;
     uint LodBufferStartIndex;
-    uint InstanceCount;
-    float3 BoundCenter;
+    uint ClusterInstanceCount;
+    uint InstanceBufferStartIndex;  
+    uint MeshLodCount;
+    float3 BoundCenter; 
     float3 BoundExtent;
 };
 
+struct ClusterOutputData
+{
+    uint FirstRenderIndex;
+    uint LodBufferStartIndex;
+    uint ClusterInstanceCountAndLodIndex; //压缩到16字节
+    uint InstanceBufferStartIndexAddLodCount; //压缩到16字节
+};
+
 //[input]
-StructuredBuffer<ClusterData> ClusterDataBuffer;
+uint TotalClusterCount;
+float4 ViewFrustumPermutedPlanes[8]; 
+StructuredBuffer<ClusterInputData> InputClusterBufferSRV;
+Buffer<float> LodDataBuffre; 
 
 //[output]
-RWStructuredBuffer<uint> SparseEntityBuffer;
+RWStructuredBuffer<ClusterOutputData> OutputClusterBufferUAV;
+RWBuffer<uint> EntityLodCountBufferUAV;
+
+uint GetClusterLod()
+{
+    //ISM不计算LOD, 这样能够与原生效果相同
+    //HISM计算方式与原生相同
+    return 0;
+}
+
+bool IntersectBox8Plane(in float3 Center, in float3 Extent)
+{
+    float4 DistX_0 = Center.xxxx * ViewFrustumPermutedPlanes[0];
+    float4 DistY_0 = Center.yyyy * ViewFrustumPermutedPlanes[1] + DistX_0;
+    float4 DistZ_0 = Center.zzzz * ViewFrustumPermutedPlanes[2] + DistY_0;
+    float4 Distance_0 = DistZ_0 - ViewFrustumPermutedPlanes[3];
+    
+    float4 PushX_0 = Extent.xxxx * abs(ViewFrustumPermutedPlanes[0]);
+    float4 PushY_0 = Extent.yyyy * abs(ViewFrustumPermutedPlanes[1]) + PushX_0;
+    float4 PushOut_0 = Extent.zzzz * abs(ViewFrustumPermutedPlanes[2]) + PushY_0;
+
+    if (any(Distance_0 > PushOut_0))
+    {
+        return false;
+    }
+
+    float4 DistX_1 = Center.xxxx * ViewFrustumPermutedPlanes[4];
+    float4 DistY_1 = Center.yyyy * ViewFrustumPermutedPlanes[5] + DistX_1;
+    float4 DistZ_1 = Center.zzzz * ViewFrustumPermutedPlanes[6] + DistY_1;
+    float4 Distance_1 = DistZ_1 - ViewFrustumPermutedPlanes[7];
+    
+    float4 PushX_1 = Extent.xxxx * abs(ViewFrustumPermutedPlanes[4]);
+    float4 PushY_1 = Extent.yyyy * abs(ViewFrustumPermutedPlanes[5]) + PushX_1;
+    float4 PushOut_1 = Extent.zzzz * abs(ViewFrustumPermutedPlanes[6]) + PushY_1;
+    
+    if (any(Distance_1 > PushOut_1))
+    {
+        return false;
+    }
+    
+    return true;
+}
 
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
 {
+    ClusterOutputData OutputRenderData = (ClusterOutputData)0;
+    if (DispatchThreadId < TotalClusterCount)
+    {
+        //每次直接读16个字节,FrustumCulling需要读取两次
+        ClusterInputData RenderData = InputClusterBufferSRV[DispatchThreadId];
+    
+        bool bIsFrustumVisible = IntersectBox8Plane(RenderData.BoundCenter, RenderData.BoundExtent);
+        if (!bIsFrustumVisible)
+        {
+            OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
+            return;
+        }
 
+        //Hiz Culling
+        bool bIsOcclusionVisible = true;
+        if (!bIsOcclusionVisible)
+        {
+            OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
+            return;
+        }
+
+        //CalcLod
+        uint CurLodIndex = GetClusterLod();
+        uint LodCountBufferIndex = RenderData.LodBufferStartIndex + CurLodIndex;
+        uint CurLodCount = 0;
+        InterlockedAdd(EntityLodCountBufferUAV[LodCountBufferIndex], RenderData.ClusterInstanceCount, CurLodCount);
+        
+        //Write Cluster Data
+        OutputRenderData.FirstRenderIndex = RenderData.FirstRenderIndex;
+        OutputRenderData.LodBufferStartIndex = RenderData.LodBufferStartIndex;
+        OutputRenderData.ClusterInstanceCountAndLodIndex = RenderData.ClusterInstanceCount | (CurLodIndex << 16);
+        OutputRenderData.InstanceBufferStartIndexAddLodCount = RenderData.InstanceBufferStartIndex + CurLodCount;
+    }
+    OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
 }
+
+//[Input]
+StructuredBuffer<ClusterOutputData> OutputClusterBufferSRV;
+Buffer<uint> LodCountBufferSRV_0;
+
+//[Output]
+RWStructuredBuffer<uint> InstanceToRenderIndexBufferUAV;
+
+[numthreads(GROUP_TILE_SIZE, 1, 1)]
+void MobileUpdateInstanceIndexBuffer(uint DispatchThreadId : SV_DispatchThreadID)
+{
+    ClusterOutputData RenderData = OutputClusterBufferSRV[DispatchThreadId];
+    uint ClusterInstanceCount = (RenderData.ClusterInstanceCountAndLodIndex & 0xFFFF);
+    if (ClusterInstanceCount == 0)
+    {
+        return;
+    }
+    
+    uint PreLodCount = 0;
+    uint CurLodIndex = (RenderData.ClusterInstanceCountAndLodIndex >> 16);
+    uint CurLodBufferIndex = RenderData.LodBufferStartIndex + CurLodIndex;
+    
+    LOOP
+    for (uint StartLodIndex = RenderData.LodBufferStartIndex; StartLodIndex < CurLodBufferIndex; ++StartLodIndex)
+    {
+        PreLodCount += LodCountBufferSRV_0[StartLodIndex];
+    }
+    
+    uint CurInstanceBufferStartIndex = RenderData.InstanceBufferStartIndexAddLodCount + PreLodCount;
+    LOOP
+    for (uint RenderIndex = 0; RenderIndex < ClusterInstanceCount; ++RenderIndex)
+    {
+        InstanceToRenderIndexBufferUAV[CurInstanceBufferStartIndex + RenderIndex] = RenderData.FirstRenderIndex + RenderIndex;
+    }     
+}
+
+
+
+//[Input]
+Buffer<uint> IndirectDrawToLodIndexBufferSRV;
+Buffer<uint> LodCountBufferSRV_1;
+
+//[Output]
+RWBuffer<uint> IndirectDrawCommandBufferUAV;
+
+[numthreads(GROUP_TILE_SIZE, 1, 1)]
+void MobileIndirectDrawUpdate(uint DispatchThreadId : SV_DispatchThreadID)
+{
+    uint IndirectDrawBufferIndex = DispatchThreadId * 5 + 1;
+    uint EntityLodCountBufferIndex = IndirectDrawToLodIndexBufferSRV[DispatchThreadId];
+    IndirectDrawCommandBufferUAV[IndirectDrawBufferIndex] = LodCountBufferSRV_1[EntityLodCountBufferIndex];
+}
+
+

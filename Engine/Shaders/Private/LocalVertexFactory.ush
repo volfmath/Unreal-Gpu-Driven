@@ -37,7 +37,17 @@
 
 float4 InstancingOffset;
 float4 InstancingFadeOutParams;
+	#if MOBILE_INSTANCE_MANUALFETCH
+		uint2 InstanceToRenderStartIndexAndIsShadow;
+		StructuredBuffer<uint> InstanceToRenderIndexBufferSRV;
+		uint GetRenderIndex(uint InstanceId)
+		{
+			uint RemapInstanceIndex = InstanceToRenderStartIndexAndIsShadow.x + InstanceId;
+			return InstanceToRenderIndexBufferSRV[RemapInstanceIndex];
+		}
+	#endif
 #endif	// USE_INSTANCING
+
 
 #if USE_SPLINEDEFORM
 float4 SplineParams[10];
@@ -356,8 +366,13 @@ float4x4 GetInstanceTransform(FPositionOnlyVertexFactoryInput Input)
 		float4(VertexFetch_InstanceTransformBuffer[4 * InstanceIndex + 3].xyz, 1.0f));
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	#elif MOBILE_INSTANCE_MANUALFETCH
+	#elif MOBILE_INSTANCE_MANUALFETCH	
 		uint InstanceId = GetInstanceId(Input.InstanceId);
+		BRANCH
+		if(InstanceToRenderStartIndexAndIsShadow.y == 0)
+		{
+			InstanceId = GetRenderIndex(InstanceId);
+		}
 		return float4x4(
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
@@ -394,6 +409,11 @@ float4x4 GetInstanceTransform(FPositionAndNormalOnlyVertexFactoryInput Input)
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	#elif MOBILE_INSTANCE_MANUALFETCH
 		uint InstanceId = GetInstanceId(Input.InstanceId);
+		BRANCH
+		if(InstanceToRenderStartIndexAndIsShadow.y == 0)
+		{
+			InstanceId = GetRenderIndex(InstanceId);
+		}
 		return float4x4(
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
@@ -804,6 +824,11 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 #elif MOBILE_INSTANCE_MANUALFETCH
 	uint InstanceId = GetInstanceId(Input.InstanceId);
+	BRANCH
+	if(InstanceToRenderStartIndexAndIsShadow.y == 0)
+	{
+		InstanceId = GetRenderIndex(InstanceId);
+	}
 	Intermediates.InstanceTransform1 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0];
 	Intermediates.InstanceTransform2 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1];
 	Intermediates.InstanceTransform3 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2];

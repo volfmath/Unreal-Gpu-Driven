@@ -5,6 +5,7 @@ class FInstancedStaticMeshSceneProxy;
 class UInstancedStaticMeshComponent;
 class UStaticMesh;
 
+
 extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven;
 
 /**----------------------Gpu Struct Layout----------------------*/
@@ -16,25 +17,22 @@ struct FDrawIndirectCommandArgs_CPU {
 	uint32    FirstInstance;
 };
 
-//每个Cluster数据,只是当前Cluster是一个Instance
-struct FClusterData_CPU {
+//因为每个数据在Thread中都会使用,所以无所谓做16字节对齐
+struct FClusterInputData_CPU {
 	uint32 FirstRenderIndex;
 	uint32 LodBufferStartIndex;
-	uint32 InstanceCount;
+	uint32 ClusterInstanceCount;
+	uint32 InstanceBufferStartIndex;
+	uint32 MeshLodCount;
 	FVector BoundCenter;
 	FVector BoundExtent;
 };
 
-struct FEntityLodBuffer_CPU {
-	float CurLodScreenSize;
-};
-
-struct FSparseClusterBuffer_CPU {
+struct FClusterOutputData_CPU {
 	uint32 FirstRenderIndex;
-};
-
-struct FEntityLodCountBuffer_CPU {
-	uint32 CurLodRenderCount;
+	uint32 LodBufferStartIndex;
+	uint32 ClusterInstanceCountAndLodIndex; //压缩到16字节
+	uint32 InstanceBufferStartIndexAddLodCount; //压缩到16字节
 };
 
 namespace SLGPUDrivenParameter {
@@ -52,60 +50,54 @@ struct FGpuDrivenInstancingUserData
 	FGpuDrivenInstancingUserData(UInstancedStaticMeshComponent* InstanceComponent)
 		: bRenderSelected(true)
 		, bRenderUnselected(true)
+		, bIsShadow(true)
 		, StartCullDistance(InstanceComponent->InstanceStartCullDistance)
 		, EndCullDistance(InstanceComponent->InstanceEndCullDistance)
+		, InstanceToRenderStartIndex(0xFFFFFFFF)
+		, InstanceToRenderIndexBufferSRV(nullptr)
 	{
 
 	}
 
 	bool bRenderSelected;
 	bool bRenderUnselected;
+	bool bIsShadow;
 
 	int32 StartCullDistance;
 	int32 EndCullDistance;
-
-	uint32 SparseClusterBufferIndex;
-	uint32 ClusterInstanceCount;
+	uint32 InstanceToRenderStartIndex;
+	FRHIShaderResourceView* InstanceToRenderIndexBufferSRV;
 };
 
 struct FMeshEntity {
 	FMeshEntity(
 		uint32 NumLod,
 		uint32 NumDrawElement,
-		uint32 NumRenderCluster,
 		uint32 UniqueObjectId,
 		uint32 UniqueWorldId,
-		FBoxSphereBounds MeshBound,
 		TArray<uint32>&& SectionIndexCount,
 		TArray<uint32>&& SectionFirstIndex,
+		TArray<uint32>&& PerLodSectionCount,
 		TArray<float>&& ScreenLODs,
-		TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> InPerInstanceRenderData,
+		TSharedPtr<TArray<FGpuDrivenCluster>, ESPMode::ThreadSafe> GpuDrivenCluster,
+		const FMatrix& ComponentLocalToWorld,
 		const FGpuDrivenInstancingUserData& UserData
 	);
 	FMeshEntity(const FMeshEntity& CopyFMeshEntity);
 	FMeshEntity(FMeshEntity&& CopyMeshEntity);
-
-	static FMeshEntity CreateMeshEntity(UInstancedStaticMeshComponent* InstanceComponent);
-
 	~FMeshEntity() {}
 
-	FBoxSphereBounds GetClusterBounds(int32 ClusterRenderIndex) const;
-	FBoxSphereBounds GetClusterBounds(int32 ClusterRenderIndex, const FBoxSphereBounds& MeshBounds) const; //just used for test
-
+	static FMeshEntity CreateMeshEntity(UInstancedStaticMeshComponent* InstanceComponent);
+	
 	uint32 NumLod;
 	uint32 NumDrawElement;
-	uint32 NumRenderCluster; //#TODO：使用TArray
 	uint32 UniqueObjectId;
 	uint32 UniqueWorldId; //用于记录注册时的WorldId
-
-	FBoxSphereBounds MeshBound;
 	TArray<uint32> SectionIndexCount;
 	TArray<uint32> SectionFirstIndex;
+	TArray<uint32> PerLodSectionCount;
 	TArray<float> ScreenLODs;
-	TWeakPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> PerInstanceRenderData;
-	//TArray<FInstanceClusterNode> ClusterNodes; //Cluster结构
-
-	//[Global Cache Data]
+	TSharedPtr<TArray<FGpuDrivenCluster>, ESPMode::ThreadSafe> GpuDrivenCluster;
 	uint32 IndirectArgsStartIndex;
 	FGpuDrivenInstancingUserData GpuDriven_UserData;
 };
@@ -123,8 +115,7 @@ struct FMobileGPUDrivenSystem {
 	~FMobileGPUDrivenSystem();
 
 	//[export function]
-	ENGINE_API static FMobileGPUDrivenSystem* GetGPUDrivenSystem_RenderThreadOrTask(uint32 UniqueObjectIndex);
-
+	ENGINE_API static FMobileGPUDrivenSystem* GetGPUDrivenSystem_RenderThreadByWorldId(uint32 UniqueWorldIndex);
 
 	//[Public Call Function]
 	//#TODO: Update Function
@@ -132,33 +123,42 @@ struct FMobileGPUDrivenSystem {
 	//void UpdateEntity_RenderThread()
 	const FMeshEntity& GetMeshEntityByUniqueId(uint32 UniqueObjectIndex) const;
 	static void RegisterEntity(UInstancedStaticMeshComponent* InstanceComponent);
-	static void UnRegisterEntity(uint32 UniqueObjectIndex);
+	static void UnRegisterEntity(uint32 UniqueObjectIndex, uint32 UniqueWorldId);
 	static void RegisterEntity_RenderThread(FMeshEntity&& MeshEntity, FMobileGPUDrivenSystem* SceneSystemPtr);
 	static void UnRegisterEntity_RenderThread(uint32 UniqueObjectIndex);
 	static bool IsGPUDrivenWorld(UWorld* World);
 	static FMobileGPUDrivenSystem* GetGPUDrivenSystem_GameThread(uint32 UniqueObjectIndex);
-	
+	static FMobileGPUDrivenSystem* GetGPUDrivenSystem_RenderThreadOrTask(uint32 UniqueObjectIndex);
 
 	//[Inner Call Function]
-	void MarkAllComponentsDirty(); //#TODO: Remove
 	void UpdateAllGPUBuffer();
 
-	//[Thread Shared]
-	static TMap<uint32, FMobileGPUDrivenSystem*> GlobalWorldIndexToSystemMap;
+	//[GameThread Only]
+	//TMap<uint32, uint32> UniqueIdToEntityIndex_GameThread;
+	uint32 WorldEntityCount_GameThread;
+	static TMap<uint32, FMobileGPUDrivenSystem*> WorldIndexToSystemMap_GameThread;
+	static TMap<uint32, FMobileGPUDrivenSystem*> GlobalUniqueIdToSystemMap_GameThread;
 
 	//[RenderThread Only]
-	uint32 ClusterCount;
+	uint32 CurTotalClusterCount;
+	uint32 CurTotalLodCount;
+	uint32 CurTotalIndirectDrawCount;
 	TArray<FMeshEntity> Entities;
 	TMap<uint32, uint32> UniqueIdToEntityIndex_RenderThread;
-	FRWBuffer IndirectDrawCommandBuffer_GPU;
-	FRWBufferStructured ClusterData_GPU;
-	FRWBufferStructured LodBuffer_GPU;
-	FRWBufferStructured SparseClusterBuffer_GPU;
+	static TMap<uint32, FMobileGPUDrivenSystem*> WorldIndexToSystemMap_RenderThread;
 	static TMap<uint32, FMobileGPUDrivenSystem*> GlobalUniqueIdToSystemMap_RenderThread;
 
-	//#TODO: Remove EntitiesComponents
-	//[GameThread Only]
-	TArray<FMeshEntityGameThread> EntitiesComponents; 
-	TMap<uint32, uint32> UniqueIdToEntityIndex_GameThread;
-	static TMap<uint32, FMobileGPUDrivenSystem*> GlobalUniqueIdToSystemMap_GameThread; 
+	//[Read Resources]
+	FReadBuffer EntityLodScreenBuffer_GPU;
+	FReadBuffer IndirectDrawToLodIndexBuffer_GPU;
+	FRWBufferStructured ClusterInputData_GPU; //#TODO: Remove UAV
+	
+	//[Output Resources]
+	FRWBuffer IndirectDrawCommandBuffer_GPU;
+	FRWBuffer EntityLodBufferCount_GPU;
+	FRWBufferStructured ClusterOutputData_GPU;
+	FRWBufferStructured InstanceToRenderIndexBuffer_GPU;
+	
+
+
 };
