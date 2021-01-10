@@ -6,7 +6,7 @@ Test code for gpu driven in unreal
   - [x] Dynamic Indirect Draw, Filter shadows, Virtual Textures, Dithered material
   - [x] LocalVertex Factory ManualVertexFetch
   - [x] Compute Shader for Frustum Culling
-  - [ ] Hiz Occlusion Culling
+  - [x] Hiz Occlusion Culling
   - [ ] Calculate Lod and update indirectDraw FirstInstance
 - [ ] Support HISM
   - [ ] Rewrite GetDynamicElement

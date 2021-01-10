@@ -645,8 +645,8 @@ public:
 	FInstancedStaticMeshSceneProxy(UInstancedStaticMeshComponent* InComponent, ERHIFeatureLevel::Type InFeatureLevel)
 	:	FStaticMeshSceneProxy(InComponent, true)
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	,   bUseGpuDriven(InComponent->GetGpuDrivenIsValid())
-	,   UniqueObjectId(0xFFFFFFFF)
+	,	bUseGpuDriven(InComponent->GetGpuDrivenIsValid())
+	,	UniqueObjectId(0xFFFFFFFF)
 	,	StaticMesh(InComponent->GetStaticMesh())
 	,	InstancedRenderData(InComponent, bUseGpuDriven, InFeatureLevel)
 	//@StarLight code - END GPU-Driven, Added by yanjianhong

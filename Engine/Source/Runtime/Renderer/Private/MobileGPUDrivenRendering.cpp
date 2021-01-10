@@ -2,6 +2,7 @@
 #include "SceneRendering.h"
 #include "ScenePrivate.h"
 #include "MobileGPUDriven.h"
+#include "MobileHZB.h"
 
 constexpr uint32 ThreadCount = 64;
 
@@ -48,6 +49,8 @@ public:
 		: FGlobalShader(Initializer) {
 		TotalClusterCount.Bind(Initializer.ParameterMap, TEXT("TotalClusterCount"));
 		ViewFrustumPermutedPlanes.Bind(Initializer.ParameterMap, TEXT("ViewFrustumPermutedPlanes"));
+		PreViewProjectMatrix.Bind(Initializer.ParameterMap, TEXT("LastFrameViewProjectMatrix"));
+		HzbResource_SRV.Bind(Initializer.ParameterMap, TEXT("HzbResource"));
 		ClusterData_SRV.Bind(Initializer.ParameterMap, TEXT("InputClusterBufferSRV"));
 		EntityLodBuffer_SRV.Bind(Initializer.ParameterMap, TEXT("LodDataBuffre"));
 		OutputClusterBuffer_UAV.Bind(Initializer.ParameterMap, TEXT("OutputClusterBufferUAV"));
@@ -58,10 +61,12 @@ public:
 		return true;
 	}
 
-	void BindParameters(FRHICommandList& RHICmdList, const FViewInfo& View, FMobileGPUDrivenSystem* GpuDrivenSystem) {
+	void BindParameters(FRHICommandList& RHICmdList, const FViewInfo& View, FMobileGPUDrivenSystem* GpuDrivenSystem, FRHITexture* InHzbResource) {
 		SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), TotalClusterCount, GpuDrivenSystem->CurTotalClusterCount);
 		SetShaderValueArray(RHICmdList, RHICmdList.GetBoundComputeShader(), ViewFrustumPermutedPlanes, View.ViewFrustum.PermutedPlanes.GetData(), View.ViewFrustum.PermutedPlanes.Num());//#TODO: 去掉远近平面? 
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), PreViewProjectMatrix, View.PrevViewInfo.ViewMatrices.GetViewProjectionMatrix()); //Last Frame
 
+		SetTextureParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), HzbResource_SRV, InHzbResource);
 		SetSRVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), EntityLodBuffer_SRV, GpuDrivenSystem->EntityLodScreenBuffer_GPU.SRV);
 		SetSRVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), ClusterData_SRV, GpuDrivenSystem->ClusterInputData_GPU.SRV);
 
@@ -78,6 +83,8 @@ public:
 private:
 	LAYOUT_FIELD(FShaderParameter, TotalClusterCount);
 	LAYOUT_FIELD(FShaderParameter, ViewFrustumPermutedPlanes);
+	LAYOUT_FIELD(FShaderParameter, PreViewProjectMatrix);
+	LAYOUT_FIELD(FShaderResourceParameter, HzbResource_SRV)
 	LAYOUT_FIELD(FShaderResourceParameter, ClusterData_SRV);
 	LAYOUT_FIELD(FShaderResourceParameter, EntityLodBuffer_SRV);
 	LAYOUT_FIELD(FShaderResourceParameter, OutputClusterBuffer_UAV);
@@ -164,69 +171,74 @@ IMPLEMENT_SHADER_TYPE(, FMobileUpdateDrawBufferCS, TEXT("/Engine/Private/MobileG
 
 void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList) {
 
-	if (CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0) {
-		SCOPED_DRAW_EVENT(RHICmdList, MobileGPUDrivenCulling);
+	SCOPED_DRAW_EVENT(RHICmdList, MobileGPUDrivenCulling);
 
-		FMobileGPUDrivenSystem* GpuDrivenSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadByWorldId(Scene->GetWorld()->GetUniqueID());
-		ensure(GpuDrivenSystem != nullptr);
-		if (GpuDrivenSystem) {
+	FMobileGPUDrivenSystem* GpuDrivenSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadByWorldId(Scene->GetWorld()->GetUniqueID());
+	if (GpuDrivenSystem) {
 
-			//Clear Pass
-			{
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
-				const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalLodCount, ThreadCount);
-				TShaderMapRef<FGpuDrivenClearCS> MobileClearShader(GetGlobalShaderMap(FeatureLevel));
-				RHICmdList.SetComputeShader(MobileClearShader.GetComputeShader());
-				MobileClearShader->BindParameters(RHICmdList, GpuDrivenSystem);
-				RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
-				MobileClearShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
-			}
+		//Clear Pass
+		{
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
+			const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalLodCount, ThreadCount);
+			TShaderMapRef<FGpuDrivenClearCS> MobileClearShader(GetGlobalShaderMap(FeatureLevel));
+			RHICmdList.SetComputeShader(MobileClearShader.GetComputeShader());
+			MobileClearShader->BindParameters(RHICmdList, GpuDrivenSystem);
+			RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
+			MobileClearShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
+		}
 
-			//Culling Pass
-			{
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->ClusterOutputData_GPU.UAV); // gfx queue to compute queue
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV); //Only used for compute queue
+		//Culling Pass
+		{
+			FTextureRHIRef MobileHZBTexture = FMobileHzbSystem::MobileHzbResourcesPtr->MobileHZBTexture->GetRenderTargetItem().ShaderResourceTexture;
 
-				const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalClusterCount, ThreadCount);
-				TShaderMapRef<FMobileGpuCullingCS> MobileGpuCullingShader(GetGlobalShaderMap(FeatureLevel));
-				RHICmdList.SetComputeShader(MobileGpuCullingShader.GetComputeShader());
-				MobileGpuCullingShader->BindParameters(RHICmdList, Views[0], GpuDrivenSystem);
-				RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
-				MobileGpuCullingShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
-			}
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EGfxToCompute, MobileHZBTexture);
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->ClusterOutputData_GPU.UAV); // gfx queue to compute queue
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV); //Only used for compute queue
 
-			//ReMapInstanceBuffer Pass
-			{
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->ClusterOutputData_GPU.UAV);
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, GpuDrivenSystem->InstanceToRenderIndexBuffer_GPU.UAV);
+			const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalClusterCount, ThreadCount);
+			TShaderMapRef<FMobileGpuCullingCS> MobileGpuCullingShader(GetGlobalShaderMap(FeatureLevel));
+			RHICmdList.SetComputeShader(MobileGpuCullingShader.GetComputeShader());
+			MobileGpuCullingShader->BindParameters(RHICmdList, Views[0], GpuDrivenSystem, MobileHZBTexture);
+			RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
+			MobileGpuCullingShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
+		}
 
-				const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalClusterCount, ThreadCount);
-				TShaderMapRef<FMobileInstanceIndexBufferCS> MobileMapInstanceShader(GetGlobalShaderMap(FeatureLevel));
-				RHICmdList.SetComputeShader(MobileMapInstanceShader.GetComputeShader());
-				MobileMapInstanceShader->BindParameters(RHICmdList, Views[0], GpuDrivenSystem);
-				RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
-				MobileMapInstanceShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
-			}
+		//ReMapInstanceBuffer Pass
+		{
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->ClusterOutputData_GPU.UAV);
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, GpuDrivenSystem->InstanceToRenderIndexBuffer_GPU.UAV);
 
-			//Update IndirectDraw Buffer
-			{
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV); 
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, GpuDrivenSystem->IndirectDrawCommandBuffer_GPU.UAV);
+			const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalClusterCount, ThreadCount);
+			TShaderMapRef<FMobileInstanceIndexBufferCS> MobileMapInstanceShader(GetGlobalShaderMap(FeatureLevel));
+			RHICmdList.SetComputeShader(MobileMapInstanceShader.GetComputeShader());
+			MobileMapInstanceShader->BindParameters(RHICmdList, Views[0], GpuDrivenSystem);
+			RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
+			MobileMapInstanceShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
+		}
 
-				const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalIndirectDrawCount, ThreadCount);
-				TShaderMapRef<FMobileUpdateDrawBufferCS> MobileUpdateDrawShader(GetGlobalShaderMap(FeatureLevel));
-				RHICmdList.SetComputeShader(MobileUpdateDrawShader.GetComputeShader());
-				MobileUpdateDrawShader->BindParameters(RHICmdList, Views[0], GpuDrivenSystem);
-				RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
-				MobileUpdateDrawShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
-			}
+		//Update IndirectDraw Buffer
+		{
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, GpuDrivenSystem->IndirectDrawCommandBuffer_GPU.UAV);
 
-			//transitionResource for gfx
-			{
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToGfx, GpuDrivenSystem->IndirectDrawCommandBuffer_GPU.UAV);
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToGfx, GpuDrivenSystem->InstanceToRenderIndexBuffer_GPU.UAV);
-			}
+			const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalIndirectDrawCount, ThreadCount);
+			TShaderMapRef<FMobileUpdateDrawBufferCS> MobileUpdateDrawShader(GetGlobalShaderMap(FeatureLevel));
+			RHICmdList.SetComputeShader(MobileUpdateDrawShader.GetComputeShader());
+			MobileUpdateDrawShader->BindParameters(RHICmdList, Views[0], GpuDrivenSystem);
+			RHICmdList.DispatchComputeShader(ThreadGroups, 1, 1);
+			MobileUpdateDrawShader->UnBindParameters(RHICmdList, GpuDrivenSystem);
+		}
+
+		//transitionResource for gfx
+		{
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToGfx, GpuDrivenSystem->IndirectDrawCommandBuffer_GPU.UAV);
+			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToGfx, GpuDrivenSystem->InstanceToRenderIndexBuffer_GPU.UAV);
 		}
 	}
+
+}
+
+bool bUseMobileGpuDriven() {
+	return CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0;
 }

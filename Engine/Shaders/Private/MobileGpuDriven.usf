@@ -32,6 +32,9 @@ struct ClusterOutputData
 //[input]
 uint TotalClusterCount;
 float4 ViewFrustumPermutedPlanes[8]; 
+float4x4 LastFrameViewProjectMatrix;
+
+Texture2D<float> HzbResource;
 StructuredBuffer<ClusterInputData> InputClusterBufferSRV;
 Buffer<float> LodDataBuffre; 
 
@@ -79,6 +82,75 @@ bool IntersectBox8Plane(in float3 Center, in float3 Extent)
     return true;
 }
 
+bool HzbTest(in float3 Center, in float3 Extent)
+{
+//  Divide by 0 produces +/- INF, except 0/0 which results in NaN.
+//  log of (+/-) 0 produces -INF. log of a negative value (other than -0) produces NaN.
+//  Reciprocal square root (rsq) or square root (sqrt) of a negative number produces NaN. The exception is -0; sqrt(-0) produces -0, and rsq(-0) produces -INF.
+//  INF - INF = NaN
+//  (+/-)INF / (+/-)INF = NaN
+//  (+/-)INF * 0 = NaN
+//  NaN (any OP) any-value = NaN
+//  The comparisons EQ, GT, GE, LT, and LE, when either or both operands is NaN returns FALSE.
+//  Comparisons ignore the sign of 0 (so +0 equals -0).
+//  The comparison NE, when either or both operands is NaN returns TRUE.
+//  Comparisons of any non-NaN value against +/- INF return the correct result.
+    
+    float3 BoundsMin = Center.xyz - Extent.xyz;
+    float3 BoundsMax = Center.xyz + Extent.xyz;
+    float3 Bounds[2] = { BoundsMin, BoundsMax };
+    
+    // Screen rect from bounds
+    float3 RectMin = float3(1, 1, 1);
+    float3 RectMax = float3(-1, -1, 0); //UE默认矩阵Z为0~1 
+    UNROLL
+    for (int i = 0; i < 8; i++)
+    {
+        float3 PointSrc;
+        PointSrc.x = Bounds[(i >> 0) & 1].x;
+        PointSrc.y = Bounds[(i >> 1) & 1].y;
+        PointSrc.z = Bounds[(i >> 2) & 1].z;
+
+        float4 PointClip = mul(float4(PointSrc, 1), LastFrameViewProjectMatrix);
+        float3 PointScreen = PointClip.xyz / PointClip.w;
+
+        RectMin = min(RectMin, PointScreen);
+        RectMax = max(RectMax, PointScreen);
+    }
+    
+    float4 Rect = saturate(float4(RectMin.xy, RectMax.xy) * float2(0.5, -0.5).xyxy + 0.5).xwzy; //超出屏幕外时不应该使用saturate,无法计算正确的大小
+    float4 RectPixels = Rect * float4(256.f, 128.f, 256.f, 128.f);
+    float2 RectSize = (RectPixels.zw - RectPixels.xy) * 0.5; // + 0.001
+    float Level = min(max(ceil(log2(max(RectSize.x, RectSize.y))), 0.f), 7.f);
+    uint SampleLevel = uint(Level);
+    
+    //采样位置计算
+    float4 SamplePosition = Rect * float4(255.f, 127.f, 255.f, 127.f); //采样时使用0~255,不同于计算大小0~1映射到0~256
+    SamplePosition = max(SamplePosition, float4(0.f, 0.f, 0.f, 0.f));
+    SamplePosition = min(SamplePosition, float4(255.f, 127.f, 255.f, 127.f));
+    uint4 MaxSamplePos = round(SamplePosition);
+    uint4 CurSamplePos = MaxSamplePos >> SampleLevel;
+    uint2 CenterSamplePos = (MaxSamplePos.xy + MaxSamplePos.zw) >> (SampleLevel + 1);
+    
+    float4 Depth;
+    Depth.x = HzbResource.Load(int3(CurSamplePos.xy, SampleLevel));
+    Depth.y = HzbResource.Load(int3(CurSamplePos.zw, SampleLevel));
+    Depth.z = HzbResource.Load(int3(CurSamplePos.x, CurSamplePos.w, SampleLevel));
+    Depth.w = HzbResource.Load(int3(CurSamplePos.z, CurSamplePos.y, SampleLevel));
+    float CenterDepth = HzbResource.Load(int3(CenterSamplePos.xy, SampleLevel));
+    
+    float2 Depth_0 = min(Depth.xy, Depth.zw);
+    float Depth_1 = min(Depth_0.x, Depth_0.y);
+    float Depth_2 = min(Depth_1, CenterDepth);
+    
+    if (RectMax.z < Depth_2)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
 {
@@ -96,7 +168,7 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         }
 
         //Hiz Culling
-        bool bIsOcclusionVisible = true;
+        bool bIsOcclusionVisible = HzbTest(RenderData.BoundCenter, RenderData.BoundExtent);
         if (!bIsOcclusionVisible)
         {
             OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;

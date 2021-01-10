@@ -52,6 +52,11 @@
 #include "GPUSortManager.h"
 #include "VolumetricCloudMobile.h"
 
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+#include "MobileHZB.h"
+#include "MobileGPUDrivenRendering.h"
+//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 uint32 GetShadowQuality();
 
 static TAutoConsoleVariable<int32> CVarMobileAlwaysResolveDepth(
@@ -286,7 +291,12 @@ void FMobileSceneRenderer::InitViews(FRHICommandListImmediate& RHICmdList)
 	PreVisibilityFrameSetup(RHICmdList);
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	MobileGPUCulling(RHICmdList);
+	if (bUseMobileGpuDriven() || DoHZBOcclusion()) {
+		FMobileHzbSystem::InitialResource();
+		if (bUseMobileGpuDriven()) {
+			MobileGPUCulling(RHICmdList);
+		}
+	}
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	ComputeViewVisibility(RHICmdList, BasePassDepthStencilAccess, ViewCommandsPerView, DynamicIndexBuffer, DynamicVertexBuffer, DynamicReadBuffer);
@@ -806,15 +816,18 @@ void FMobileSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	RHICmdList.EndRenderPass();
 
 	// @StarLight code - BEGIN HZB Created By YJH
-	if (DoHZBOcclusion())
-	{
-		// Hint to the RHI to submit commands up to this point to the GPU if possible.  Can help avoid CPU stalls next frame waiting
-		// for these query results on some platforms.
-		RHICmdList.SetCurrentStat(GET_STATID(STAT_CLMM_HZBOcclusion));
-		MobileRenderHZB(RHICmdList);
-		RHICmdList.SubmitCommandsHint();
-		bSubmitOffscreenRendering = false; // submit once
-		RHICmdList.ImmediateFlush(EImmediateFlushType::DispatchToRHIThread);
+	if (bUseMobileGpuDriven() || DoHZBOcclusion()){
+
+		MobileBuildHzb(RHICmdList);
+		
+		if (DoHZBOcclusion()) {
+			// Hint to the RHI to submit commands up to this point to the GPU if possible.  Can help avoid CPU stalls next frame waiting
+			// for these query results on some platforms.
+			MobileSubmitHzb(RHICmdList);
+			RHICmdList.SubmitCommandsHint();
+			bSubmitOffscreenRendering = false; // submit once
+			RHICmdList.ImmediateFlush(EImmediateFlushType::DispatchToRHIThread);
+		}
 	}
 	// @StarLight code - END HZB Created By YJH
 

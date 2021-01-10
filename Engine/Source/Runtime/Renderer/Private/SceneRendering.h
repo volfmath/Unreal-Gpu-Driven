@@ -1875,7 +1875,8 @@ protected:
 	// end
 
 	// @StarLight code - BEGIN HZB Created By yanjianhong
-	void MobileRenderHZB(FRHICommandListImmediate& RHICmdList);
+	void MobileBuildHzb(FRHICommandListImmediate& RHICmdList);
+	void MobileSubmitHzb(FRHICommandListImmediate& RHICmdList);
 	// @StarLight code - BEGIN HZB Created By yanjianhong
 
 	// @StarLight code - BEGIN GPU-Driven Created By yanjianhong
