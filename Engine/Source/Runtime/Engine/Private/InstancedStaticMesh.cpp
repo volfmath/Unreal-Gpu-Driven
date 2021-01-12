@@ -862,43 +862,42 @@ void FInstancedStaticMeshRenderData::InitVertexFactories()
 			}
 		);
 	}
-	else {
-		// Allocate the vertex factories for each LOD
-		for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
-		{
-			VertexFactories.Add(new FInstancedStaticMeshVertexFactory(FeatureLevel));
-		}
 
-		const int32 LightMapCoordinateIndex = Component->GetStaticMesh()->LightMapCoordinateIndex;
-		ENQUEUE_RENDER_COMMAND(InstancedStaticMeshRenderData_InitVertexFactories)(
-			[this, LightMapCoordinateIndex](FRHICommandListImmediate& RHICmdList)
-			{
-				for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
-				{
-					const FStaticMeshLODResources* RenderData = &LODModels[LODIndex];
-
-					FInstancedStaticMeshVertexFactory::FDataType Data;
-					// Assign to the vertex factory for this LOD.
-					FInstancedStaticMeshVertexFactory& VertexFactory = VertexFactories[LODIndex];
-
-					RenderData->VertexBuffers.PositionVertexBuffer.BindPositionVertexBuffer(&VertexFactory, Data);
-					RenderData->VertexBuffers.StaticMeshVertexBuffer.BindTangentVertexBuffer(&VertexFactory, Data);
-					RenderData->VertexBuffers.StaticMeshVertexBuffer.BindPackedTexCoordVertexBuffer(&VertexFactory, Data);
-					if (LightMapCoordinateIndex < (int32)RenderData->VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords() && LightMapCoordinateIndex >= 0)
-					{
-						RenderData->VertexBuffers.StaticMeshVertexBuffer.BindLightMapVertexBuffer(&VertexFactory, Data, LightMapCoordinateIndex);
-					}
-					RenderData->VertexBuffers.ColorVertexBuffer.BindColorVertexBuffer(&VertexFactory, Data);
-
-					check(PerInstanceRenderData);
-					PerInstanceRenderData->InstanceBuffer.BindInstanceVertexBuffer(&VertexFactory, Data);
-
-					VertexFactory.SetData(Data);
-					VertexFactory.InitResource();
-				}
-			}
-		);
+	// Allocate the vertex factories for each LOD
+	for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
+	{
+		VertexFactories.Add(new FInstancedStaticMeshVertexFactory(FeatureLevel));
 	}
+
+	const int32 LightMapCoordinateIndex = Component->GetStaticMesh()->LightMapCoordinateIndex;
+	ENQUEUE_RENDER_COMMAND(InstancedStaticMeshRenderData_InitVertexFactories)(
+		[this, LightMapCoordinateIndex](FRHICommandListImmediate& RHICmdList)
+		{
+			for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
+			{
+				const FStaticMeshLODResources* RenderData = &LODModels[LODIndex];
+
+				FInstancedStaticMeshVertexFactory::FDataType Data;
+				// Assign to the vertex factory for this LOD.
+				FInstancedStaticMeshVertexFactory& VertexFactory = VertexFactories[LODIndex];
+
+				RenderData->VertexBuffers.PositionVertexBuffer.BindPositionVertexBuffer(&VertexFactory, Data);
+				RenderData->VertexBuffers.StaticMeshVertexBuffer.BindTangentVertexBuffer(&VertexFactory, Data);
+				RenderData->VertexBuffers.StaticMeshVertexBuffer.BindPackedTexCoordVertexBuffer(&VertexFactory, Data);
+				if (LightMapCoordinateIndex < (int32)RenderData->VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords() && LightMapCoordinateIndex >= 0)
+				{
+					RenderData->VertexBuffers.StaticMeshVertexBuffer.BindLightMapVertexBuffer(&VertexFactory, Data, LightMapCoordinateIndex);
+				}
+				RenderData->VertexBuffers.ColorVertexBuffer.BindColorVertexBuffer(&VertexFactory, Data);
+
+				check(PerInstanceRenderData);
+				PerInstanceRenderData->InstanceBuffer.BindInstanceVertexBuffer(&VertexFactory, Data);
+
+				VertexFactory.SetData(Data);
+				VertexFactory.InitResource();
+			}
+		}
+	);
 }
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -980,7 +979,7 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 					MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex]; //即使在shader中动态判断,但一个VS内的分支全部相同
 					MeshElement.bCanApplyViewModeOverrides = true;
 					MeshElement.bUseSelectionOutline = false; //决定渲染Hit的参数
-					MeshElement.bUseWireframeSelectionColoring = false;
+					MeshElement.bUseWireframeSelectionColoring = false; //Wireframe下被选中是否使用颜色
 
 					const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 					FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];

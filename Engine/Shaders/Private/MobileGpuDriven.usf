@@ -124,8 +124,9 @@ bool HzbTest(in float3 Center, in float3 Extent)
     float Level = min(max(ceil(log2(max(RectSize.x, RectSize.y))), 0.f), 7.f);
     uint SampleLevel = uint(Level);
     
-    //采样位置计算
-    float4 SamplePosition = Rect * float4(255.f, 127.f, 255.f, 127.f); //采样时使用0~255,不同于计算大小0~1映射到0~256
+    //https://docs.microsoft.com/en-us/windows/win32/direct3d9/nearest-point-sampling
+    //纹理下标应当映射到[-0.5, n - 0.5]
+    float4 SamplePosition = Rect * float4(256.f, 128.f, 256.f, 128.f) - 0.5f; 
     SamplePosition = max(SamplePosition, float4(0.f, 0.f, 0.f, 0.f));
     SamplePosition = min(SamplePosition, float4(255.f, 127.f, 255.f, 127.f));
     uint4 MaxSamplePos = round(SamplePosition);

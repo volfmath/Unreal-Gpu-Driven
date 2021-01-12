@@ -9,4 +9,7 @@ Test code for gpu driven in unreal
   - [x] Hiz Occlusion Culling
   - [ ] Calculate Lod and update indirectDraw FirstInstance
 - [ ] Support HISM
-  - [ ] Rewrite GetDynamicElement
+  - [x] Construct the Cluster
+  - [x] Rewrite GetDynamicElement
+  - [ ] Distance Culling
+  - [ ] HISM Lod Calculate

@@ -559,11 +559,10 @@ public:
 					Scene->RemoveSpeedTreeWind_RenderThread(&ManualFetchVertexFactories[LODIndex], StaticMesh);
 				}
 			}
-			else {
-				for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
-				{
-					Scene->RemoveSpeedTreeWind_RenderThread(&VertexFactories[LODIndex], StaticMesh);
-				}
+
+			for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
+			{
+				Scene->RemoveSpeedTreeWind_RenderThread(&VertexFactories[LODIndex], StaticMesh);
 			}
 		}
 		
@@ -573,12 +572,10 @@ public:
 				ManualFetchVertexFactories[LODIndex].ReleaseResource();
 			}
 		}
-		else {
-			for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
-			{
-				VertexFactories[LODIndex].ReleaseResource();
-			}
-		}			
+		for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
+		{
+			VertexFactories[LODIndex].ReleaseResource();
+		}
 	}
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -621,11 +618,9 @@ private:
 					Component->GetScene()->AddSpeedTreeWind(&ManualFetchVertexFactories[LODIndex], Component->GetStaticMesh());
 				}
 			}
-			else {
-				for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
-				{
-					Component->GetScene()->AddSpeedTreeWind(&VertexFactories[LODIndex], Component->GetStaticMesh());
-				}
+			for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
+			{
+				Component->GetScene()->AddSpeedTreeWind(&VertexFactories[LODIndex], Component->GetStaticMesh());
 			}
 		}
 	}

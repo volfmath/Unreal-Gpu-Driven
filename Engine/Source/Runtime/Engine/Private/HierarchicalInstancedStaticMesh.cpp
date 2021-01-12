@@ -33,6 +33,10 @@
 #include "ComponentRecreateRenderStateContext.h"
 #include "Algo/AnyOf.h"
 
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+#include "MobileGPUDriven.h"
+//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 static TAutoConsoleVariable<int32> CVarFoliageSplitFactor(
 	TEXT("foliage.SplitFactor"),
 	16,
@@ -1251,6 +1255,10 @@ public:
 
 	template<bool TUseVector>
 	void Traverse(const FFoliageCullInstanceParams& Params, int32 Index, int32 MinLOD, int32 MaxLOD, bool bFullyContained = false) const;
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	void BuildIndirectDrawBatch(const FSceneView* View, const FSceneViewFamily& ViewFamily, FMeshElementCollector& Collector) const;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
 };
 
 struct FFoliageRenderInstanceParams
@@ -1690,14 +1698,26 @@ void FHierarchicalStaticMeshSceneProxy::FillDynamicMeshElements(FMeshElementColl
 
 void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_HierarchicalInstancedStaticMeshSceneProxy_GetMeshElements);
+	SCOPE_CYCLE_COUNTER(STAT_HISMCGetDynamicMeshElement);
+
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	if (bUseGpuDriven && !bHasSelectedInstances) {
+		check(Views.Num() == 1);
+		const FSceneView* View = Views[0];
+
+		if (ClusterTree.Num() && View->GetDynamicMeshElementsShadowCullFrustum() == nullptr) {
+			BuildIndirectDrawBatch(View, ViewFamily, Collector);
+			return;
+		}
+	}
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 	if (Views[0]->bRenderFirstInstanceOnly)
 	{
 		FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(Views, ViewFamily, VisibilityMap, Collector);
 		return;
 	}
-
-	QUICK_SCOPE_CYCLE_COUNTER(STAT_HierarchicalInstancedStaticMeshSceneProxy_GetMeshElements);
-	SCOPE_CYCLE_COUNTER(STAT_HISMCGetDynamicMeshElement);
 
 	bool bMultipleSections = ALLOW_DITHERED_LOD_FOR_INSTANCED_STATIC_MESHES && bDitheredLODTransitions && CVarDitheredLOD.GetValueOnRenderThread() > 0;
 	bool bSingleSections = !bMultipleSections;
@@ -1761,8 +1781,8 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 					if ((Views[0]->IsInstancedStereoPass() || Views[0]->bIsMobileMultiViewEnabled) && ViewIndex == 0)
 					{
 						check(Views.Num() == 2);
-						
-						const FMatrix LeftEyeLocalViewProjForCulling  = GetLocalToWorld() * Views[0]->ViewMatrices.GetViewProjectionMatrix();
+
+						const FMatrix LeftEyeLocalViewProjForCulling = GetLocalToWorld() * Views[0]->ViewMatrices.GetViewProjectionMatrix();
 						const FMatrix RightEyeLocalViewProjForCulling = GetLocalToWorld() * Views[1]->ViewMatrices.GetViewProjectionMatrix();
 
 						FConvexVolume LeftEyeBounds, RightEyeBounds;
@@ -1774,7 +1794,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 						{
 							continue;
 						}
-						
+
 						InstanceParams.ViewFrustumLocal.Planes.Empty(5);
 						InstanceParams.ViewFrustumLocal.Planes.Add(LeftEyeBounds.Planes[0]);
 						InstanceParams.ViewFrustumLocal.Planes.Add(RightEyeBounds.Planes[1]);
@@ -1808,7 +1828,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 						}
 						else
 						{
-							 // zero scaling or something, cull everything
+							// zero scaling or something, cull everything
 							continue;
 						}
 					}
@@ -1836,7 +1856,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 				float LODScale = CVarFoliageLODDistanceScale.GetValueOnRenderThread();
 				float LODRandom = CVarRandomLODRange.GetValueOnRenderThread();
 				float MaxDrawDistanceScale = GetCachedScalabilityCVars().ViewDistanceScale;
-				
+
 				FVector AverageScale = (InstanceParams.Tree[0].MinInstanceScale + (InstanceParams.Tree[0].MaxInstanceScale - InstanceParams.Tree[0].MinInstanceScale) / 2.0f);
 				FBoxSphereBounds ScaledBounds = RenderData->Bounds.TransformBy(FTransform(FRotator::ZeroRotator, FVector::ZeroVector, AverageScale));
 				float SphereRadius = ScaledBounds.SphereRadius;
@@ -1868,7 +1888,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 				// Added assert guard to track issue UE-53944
 				check(InstanceParams.LODs <= 8);
 				check(RenderData != nullptr);
-			
+
 				for (int32 LODIndex = 0; LODIndex < InstanceParams.LODs; LODIndex++)
 				{
 					InstanceParams.MinInstancesToSplit[LODIndex] = 2;
@@ -2008,7 +2028,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 					{
 						FMatrix WorldToLocal = GetLocalToWorld().Inverse();
 						FVector ViewOriginInLocalZero = WorldToLocal.TransformPosition(View->GetTemporalLODOrigin(0, bMultipleSections));
-						FVector ViewOriginInLocalOne  = WorldToLocal.TransformPosition(View->GetTemporalLODOrigin(1, bMultipleSections));
+						FVector ViewOriginInLocalOne = WorldToLocal.TransformPosition(View->GetTemporalLODOrigin(1, bMultipleSections));
 						float LODPlanesMax[MAX_STATIC_MESH_LODS];
 						float LODPlanesMin[MAX_STATIC_MESH_LODS];
 
@@ -2102,6 +2122,70 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 		}
 	}
 }
+
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+void FHierarchicalStaticMeshSceneProxy::BuildIndirectDrawBatch(const FSceneView* View, const FSceneViewFamily& ViewFamily, FMeshElementCollector& Collector) const{
+	SCOPE_CYCLE_COUNTER(STAT_FoliageBatchTime);
+
+	int32 FirstLOD = this->GetCurrentFirstLODIdx_Internal();
+	check(FirstLOD == 0);
+	int32 LastLODPlusOne = InstancedRenderData.ManualFetchVertexFactories.Num();
+
+	auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
+	check(CurrentSystem);
+	const FMeshEntity& MeshEntity = CurrentSystem->GetMeshEntityByUniqueId(UniqueObjectId);
+
+	for (int32 LODIndex = FirstLOD; LODIndex < LastLODPlusOne; LODIndex++) {
+		const FStaticMeshLODResources& LODModel = RenderData->LODResources[LODIndex];
+		for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++) {
+
+			//Only one MeshBatch, one MeshBatchElement
+			FMeshBatch& MeshElement = Collector.AllocateMesh();
+			if (FStaticMeshSceneProxy::GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, false, MeshElement)) {
+
+				check(LODIndex < InstancedRenderData.ManualFetchVertexFactories.Num());
+
+				MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex];
+				MeshElement.bCanApplyViewModeOverrides = true;
+				MeshElement.bUseSelectionOutline = false; //决定渲染Hit的参数
+				MeshElement.bUseWireframeSelectionColoring = false;
+				MeshElement.bUseAsOccluder = ShouldUseAsOccluder();
+
+				const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
+				FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
+				auto UserDataPtr = const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData);
+				UserDataPtr->bIsShadow = false;
+				BatchElement0.UserData = reinterpret_cast<void*>(UserDataPtr);
+				BatchElement0.bUserDataIsColorVertexBuffer = false;
+				BatchElement0.MaxScreenSize = 1.0;
+				BatchElement0.MinScreenSize = 0.0;
+				BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
+				BatchElement0.UserIndex = 0; //Not needed used to Dithered
+				BatchElement0.PrimitiveUniformBuffer = GetUniformBuffer();
+				BatchElement0.NumInstances = NumInstances;
+
+				SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement, MeshEntity, CurrentSystem);
+				Collector.AddMesh(0, MeshElement);
+			}
+		}
+	}
+
+	if (View->Family->EngineShowFlags.HISMCClusterTree)
+	{
+		FColor StartingColor(100, 0, 0);
+		for (const FClusterNode& CulsterNode : ClusterTree){
+			if (CulsterNode.FirstChild > 0) {
+				continue;
+			}
+			DrawWireBox(Collector.GetPDI(0), GetLocalToWorld(), FBox(CulsterNode.BoundMin, CulsterNode.BoundMax), StartingColor, View->Family->EngineShowFlags.Game ? SDPG_World : SDPG_Foreground);
+			StartingColor.R += 5;
+			StartingColor.G += 5;
+			StartingColor.B += 5;
+		}
+	}
+
+}
+//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 void FHierarchicalStaticMeshSceneProxy::AcceptOcclusionResults(const FSceneView* View, TArray<bool>* Results, int32 ResultsStart, int32 NumResults)
 { 
@@ -3681,10 +3765,38 @@ TArray<int32> UHierarchicalInstancedStaticMeshComponent::GetInstancesOverlapping
 	}
 }
 
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 void UHierarchicalInstancedStaticMeshComponent::BuildGpuDrivenCluster() {
+	check(ClusterTreePtr.IsValid());
+	const TArray<FClusterNode>& ClusterTreeRef = *ClusterTreePtr;
+	int32 LeafNodeStartIndex = 0;
+	for (int32 Index = 0; Index < ClusterTreeRef.Num(); ++Index){
+		if (ClusterTreeRef[Index].FirstChild < 0){
+			LeafNodeStartIndex = Index;
+			break;
+		}
+	}
+	if (ClusterTreeRef.Num() > 0) {
+		FVector AverageScale = ClusterTreeRef[0].MinInstanceScale + (ClusterTreeRef[0].MaxInstanceScale - ClusterTreeRef[0].MinInstanceScale) / 2.f;
+		check(AverageScale.Equals(FVector(1.f, 1.f, 1.f)));
 
+		GpuDrivenCluster = MakeShared<TArray<FGpuDrivenCluster>, ESPMode::ThreadSafe>();
+		GpuDrivenCluster->Empty(ClusterTreeRef.Num() - LeafNodeStartIndex);
 
+		const FTransform& ComponentTransform = GetComponentTransform();
+		uint32 FirstRenderIndex = 0;
+		for (int32 i = LeafNodeStartIndex; i < ClusterTreeRef.Num(); ++i) {
+			FBoxSphereBounds RenderBounds = FBoxSphereBounds(FBox(ClusterTreeRef[i].BoundMin, ClusterTreeRef[i].BoundMax));
+			//FBoxSphereBounds ScaledBounds = RenderData->Bounds.TransformBy(FTransform(FRotator::ZeroRotator, FVector::ZeroVector, AverageScale));
+
+			const FBoxSphereBounds ClusterBound = RenderBounds.TransformBy(ComponentTransform);
+			uint32 ClusterInstanceCount = ClusterTreeRef[i].LastInstance - ClusterTreeRef[i].FirstInstance + 1;
+			GpuDrivenCluster->Emplace(FirstRenderIndex, ClusterInstanceCount, ClusterBound.Origin, ClusterBound.BoxExtent);
+			FirstRenderIndex += ClusterInstanceCount;
+		}
+	}
 }
+//@StarLight code - END GPU-Driven, Added by yanjianhong
 
 static void RebuildFoliageTrees(const TArray<FString>& Args)
 {
