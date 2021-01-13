@@ -3778,7 +3778,7 @@ void UHierarchicalInstancedStaticMeshComponent::BuildGpuDrivenCluster() {
 	}
 	if (ClusterTreeRef.Num() > 0) {
 		FVector AverageScale = ClusterTreeRef[0].MinInstanceScale + (ClusterTreeRef[0].MaxInstanceScale - ClusterTreeRef[0].MinInstanceScale) / 2.f;
-		check(AverageScale.Equals(FVector(1.f, 1.f, 1.f)));
+		//check(AverageScale.Equals(FVector(1.f, 1.f, 1.f)));
 
 		GpuDrivenCluster = MakeShared<TArray<FGpuDrivenCluster>, ESPMode::ThreadSafe>();
 		GpuDrivenCluster->Empty(ClusterTreeRef.Num() - LeafNodeStartIndex);

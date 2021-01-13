@@ -171,6 +171,7 @@ FMeshEntity::FMeshEntity
 	uint32 InNumDrawElement,
 	uint32 InUniqueObjectId,
 	uint32 InUniqueWorldId,
+	float InCullDistance,
 	TArray<uint32>&& InSectionIndexCount,
 	TArray<uint32>&& InSectionFirstIndex,
 	TArray<uint32>&& InPerLodSectionCount,
@@ -183,6 +184,7 @@ FMeshEntity::FMeshEntity
 	, NumDrawElement(InNumDrawElement)
 	, UniqueObjectId(InUniqueObjectId)
 	, UniqueWorldId(InUniqueWorldId)
+	, CullDistance(InCullDistance)
 	, SectionIndexCount(MoveTemp(InSectionIndexCount))
 	, SectionFirstIndex(MoveTemp(InSectionFirstIndex))
 	, PerLodSectionCount(MoveTemp(InPerLodSectionCount))
@@ -199,6 +201,7 @@ FMeshEntity::FMeshEntity(const FMeshEntity& CopyMeshEntity)
 	, NumDrawElement(CopyMeshEntity.NumDrawElement)
 	, UniqueObjectId(CopyMeshEntity.UniqueObjectId)
 	, UniqueWorldId(CopyMeshEntity.UniqueWorldId)
+	, CullDistance(CopyMeshEntity.CullDistance)
 	, SectionIndexCount(CopyMeshEntity.SectionIndexCount)
 	, SectionFirstIndex(CopyMeshEntity.SectionFirstIndex)
 	, PerLodSectionCount(CopyMeshEntity.PerLodSectionCount)
@@ -215,6 +218,7 @@ FMeshEntity::FMeshEntity(FMeshEntity&& CopyMeshEntity)
 	, NumDrawElement(CopyMeshEntity.NumDrawElement)
 	, UniqueObjectId(CopyMeshEntity.UniqueObjectId)
 	, UniqueWorldId(CopyMeshEntity.UniqueWorldId)
+	, CullDistance(CopyMeshEntity.CullDistance)
 	, SectionIndexCount(MoveTemp(CopyMeshEntity.SectionIndexCount))
 	, SectionFirstIndex(MoveTemp(CopyMeshEntity.SectionFirstIndex))
 	, PerLodSectionCount(MoveTemp(CopyMeshEntity.PerLodSectionCount))
@@ -268,11 +272,15 @@ FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* Instanc
 
 	FGpuDrivenInstancingUserData NewUserData = FGpuDrivenInstancingUserData(InstanceComponent);
 
+	//grass.CullDistanceScale已经在InstanceEndCullDistance其中赋值,所以不处理GGrassCullDistanceScale
+	float InstanceCullDis = InstanceComponent->InstanceEndCullDistance * GetCachedScalabilityCVars().ViewDistanceScale;
+
 	return FMeshEntity(
 		NumLod, 
 		NumDrawElement, 
 		UniqueObjectId, 
 		UniqueWorldId, 
+		InstanceCullDis,
 		MoveTemp(SectionIndexCount), 
 		MoveTemp(SectionFirstIndex), 
 		MoveTemp(PerLodSectionCount),
@@ -349,9 +357,10 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 				ClusterDataBuffer.LodBufferStartIndex = CurTotalLodCount;
 				check(CurCluster.ClusterInstanceCount >= 1 && CurCluster.ClusterInstanceCount <= 65535); //确保不为空并且压缩在8位内
 				ClusterDataBuffer.ClusterInstanceCount = CurCluster.ClusterInstanceCount;
-				ClusterDataBuffer.InstanceBufferStartIndex = LocalStartInstanceIndex;
-				ClusterDataBuffer.MeshLodCount = ProxyEntity.NumLod;
+				ClusterDataBuffer.InstanceBufferStartIndex = LocalStartInstanceIndex;	
+				ClusterDataBuffer.CullDistance = ProxyEntity.CullDistance;
 				ClusterDataBuffer.BoundCenter = CurCluster.BoundCenter;
+				ClusterDataBuffer.MeshLodCount = ProxyEntity.NumLod;
 				ClusterDataBuffer.BoundExtent = CurCluster.BoundExtent;
 				LocalClusterIndex += 1;
 				CurTotalInstanceCount += CurCluster.ClusterInstanceCount;
@@ -392,7 +401,7 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 				LocalIndirectDrawIndex += 1;
 
 				auto& IndirectDrawToLodIndex = IndirectDrawToLodIndexBuffer_CPU[DrawElementIndex];
-				IndirectDrawToLodIndex = LocalLodIndex + CurTotalIndirectDrawCount;
+				IndirectDrawToLodIndex = LocalLodIndex + CurTotalLodCount;
 				LocalSectionIndex += 1;
 				if (ProxyEntity.PerLodSectionCount[LocalLodIndex] == LocalSectionIndex) {
 					LocalLodIndex += 1;

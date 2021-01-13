@@ -1,6 +1,7 @@
 #include "Common.ush"
 
-#define GROUP_TILE_SIZE 64
+#define GROUP_TILE_SIZE     64
+#define SMALL_NUMBER		1.e-8f
 
 //[Output]
 RWBuffer<uint> ClearUAV;
@@ -16,8 +17,11 @@ struct ClusterInputData
     uint LodBufferStartIndex;
     uint ClusterInstanceCount;
     uint InstanceBufferStartIndex;  
+    
+    float CullDistance; //注意对齐16字节
+    float3 BoundCenter;
+    
     uint MeshLodCount;
-    float3 BoundCenter; 
     float3 BoundExtent;
 };
 
@@ -31,7 +35,9 @@ struct ClusterOutputData
 
 //[input]
 uint TotalClusterCount;
+float3 ViewOriginPosition;
 float4 ViewFrustumPermutedPlanes[8]; 
+float2 ProjMatrixXY;
 float4x4 LastFrameViewProjectMatrix;
 
 Texture2D<float> HzbResource;
@@ -42,11 +48,51 @@ Buffer<float> LodDataBuffre;
 RWStructuredBuffer<ClusterOutputData> OutputClusterBufferUAV;
 RWBuffer<uint> EntityLodCountBufferUAV;
 
-uint GetClusterLod()
+
+uint GetClusterLod(in float3 BoundMin, in float3 BoundMax, in uint MeshLodCount, in uint LodBufferStartIndex)
 {
-    //ISM不计算LOD, 这样能够与原生效果相同
-    //HISM计算方式与原生相同
-    return 0;
+    float3 Center = (BoundMin + BoundMax) * 0.5f;
+    float BoundHalfExtent = distance(BoundMin, BoundMax) * 0.5f; //#TODO: Lod使用StaticMesh的Bound计算
+    float ViewToCenterDis = distance(Center, ViewOriginPosition);
+    float FarDistance = ViewToCenterDis - BoundHalfExtent;
+    // Get projection multiple accounting for view scaling.
+    float ScreenMultiple = max(0.5f * ProjMatrixXY.x, 0.5f * ProjMatrixXY.y);
+    
+    uint CurLod = MeshLodCount - 1;
+
+    LOOP
+    for (int Index = MeshLodCount - 1; Index >= 0; --Index)
+    {
+        uint CurLodIndex = LodBufferStartIndex + Index;
+        
+        float ScreenSize = LodDataBuffre[CurLodIndex];
+ 
+        // ScreenSize is the projected diameter, so halve it
+        float ScreenRadius = max(SMALL_NUMBER, ScreenSize * 0.5f);
+        float DrawDistance = (ScreenMultiple * BoundHalfExtent) * rcp(ScreenRadius);
+        if (FarDistance < DrawDistance)
+        {
+            CurLod = Index;
+            break;
+        }
+    }
+   
+    return CurLod;
+}
+
+bool DistanceCulling(in float3 BoundMin, in float3 BoundMax, in float CullDistance)
+{
+    float3 Center = (BoundMin + BoundMax) * 0.5f;
+    float BoundHalfExtent = distance(BoundMin, BoundMax) * 0.5f;
+    float ViewToCenterDis = distance(Center, ViewOriginPosition);
+    float NearDistance = ViewToCenterDis - BoundHalfExtent;
+    
+    if (NearDistance > CullDistance)
+    {
+        return false;
+    }
+    
+   return true;
 }
 
 bool IntersectBox8Plane(in float3 Center, in float3 Extent)
@@ -82,7 +128,7 @@ bool IntersectBox8Plane(in float3 Center, in float3 Extent)
     return true;
 }
 
-bool HzbTest(in float3 Center, in float3 Extent)
+bool HzbTest(in float3 BoundMin, in float3 BoundMax)
 {
 //  Divide by 0 produces +/- INF, except 0/0 which results in NaN.
 //  log of (+/-) 0 produces -INF. log of a negative value (other than -0) produces NaN.
@@ -96,9 +142,8 @@ bool HzbTest(in float3 Center, in float3 Extent)
 //  The comparison NE, when either or both operands is NaN returns TRUE.
 //  Comparisons of any non-NaN value against +/- INF return the correct result.
     
-    float3 BoundsMin = Center.xyz - Extent.xyz;
-    float3 BoundsMax = Center.xyz + Extent.xyz;
-    float3 Bounds[2] = { BoundsMin, BoundsMax };
+
+    float3 Bounds[2] = { BoundMin, BoundMax };
     
     // Screen rect from bounds
     float3 RectMin = float3(1, 1, 1);
@@ -133,6 +178,24 @@ bool HzbTest(in float3 Center, in float3 Extent)
     uint4 CurSamplePos = MaxSamplePos >> SampleLevel;
     uint2 CenterSamplePos = (MaxSamplePos.xy + MaxSamplePos.zw) >> (SampleLevel + 1);
     
+    
+    //float4 MinDepth = 1;
+    //uint2 Scale = (CurSamplePos.zw - CurSamplePos.xy) / 3;
+    //uint2 Bias = CurSamplePos.xy;
+    
+    //UNROLL
+    //for (int i = 0; i < 4; i++)
+    //{
+    //    float4 Depth;
+    //    Depth.x = HzbResource.Load(int3(int2(i, 0) * Scale + Bias, SampleLevel));
+    //    Depth.y = HzbResource.Load(int3(int2(i, 1) * Scale + Bias, SampleLevel));
+    //    Depth.z = HzbResource.Load(int3(int2(i, 2) * Scale + Bias, SampleLevel));
+    //    Depth.w = HzbResource.Load(int3(int2(i, 3) * Scale + Bias, SampleLevel));
+    //    MinDepth = min(MinDepth, Depth);
+    //}
+    
+    //MinDepth.x = min(min(MinDepth.x, MinDepth.y), min(MinDepth.z, MinDepth.w));
+    
     float4 Depth;
     Depth.x = HzbResource.Load(int3(CurSamplePos.xy, SampleLevel));
     Depth.y = HzbResource.Load(int3(CurSamplePos.zw, SampleLevel));
@@ -144,7 +207,7 @@ bool HzbTest(in float3 Center, in float3 Extent)
     float Depth_1 = min(Depth_0.x, Depth_0.y);
     float Depth_2 = min(Depth_1, CenterDepth);
     
-    if (RectMax.z < Depth_2)
+    if (RectMax.z < Depth_2.x)
     {
         return false;
     }
@@ -161,6 +224,16 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         //每次直接读16个字节,FrustumCulling需要读取两次
         ClusterInputData RenderData = InputClusterBufferSRV[DispatchThreadId];
     
+        //Distance Culling
+        float3 BoundsMin = RenderData.BoundCenter.xyz - RenderData.BoundExtent.xyz;
+        float3 BoundsMax = RenderData.BoundCenter.xyz + RenderData.BoundExtent.xyz;
+        bool bIsDistanceVisible = DistanceCulling(BoundsMin, BoundsMax, RenderData.CullDistance);
+        if (!bIsDistanceVisible)
+        {
+            OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
+            return;
+        }
+        
         bool bIsFrustumVisible = IntersectBox8Plane(RenderData.BoundCenter, RenderData.BoundExtent);
         if (!bIsFrustumVisible)
         {
@@ -169,7 +242,7 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         }
 
         //Hiz Culling
-        bool bIsOcclusionVisible = HzbTest(RenderData.BoundCenter, RenderData.BoundExtent);
+        bool bIsOcclusionVisible = HzbTest(BoundsMin, BoundsMax);
         if (!bIsOcclusionVisible)
         {
             OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
@@ -177,7 +250,7 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         }
 
         //CalcLod
-        uint CurLodIndex = GetClusterLod();
+        uint CurLodIndex = /*GetClusterLod(BoundsMin, BoundsMax, RenderData.MeshLodCount, RenderData.LodBufferStartIndex)*/0;
         uint LodCountBufferIndex = RenderData.LodBufferStartIndex + CurLodIndex;
         uint CurLodCount = 0;
         InterlockedAdd(EntityLodCountBufferUAV[LodCountBufferIndex], RenderData.ClusterInstanceCount, CurLodCount);
@@ -226,8 +299,6 @@ void MobileUpdateInstanceIndexBuffer(uint DispatchThreadId : SV_DispatchThreadID
     }     
 }
 
-
-
 //[Input]
 Buffer<uint> IndirectDrawToLodIndexBufferSRV;
 Buffer<uint> LodCountBufferSRV_1;
@@ -238,9 +309,10 @@ RWBuffer<uint> IndirectDrawCommandBufferUAV;
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileIndirectDrawUpdate(uint DispatchThreadId : SV_DispatchThreadID)
 {
-    uint IndirectDrawBufferIndex = DispatchThreadId * 5 + 1;
+    uint IndirectDrawInstanceCountIndex = DispatchThreadId * 5 + 1; //InstanceCount
+    uint IndirectDrawFirstIndex = DispatchThreadId * 5 + 4;
     uint EntityLodCountBufferIndex = IndirectDrawToLodIndexBufferSRV[DispatchThreadId];
-    IndirectDrawCommandBufferUAV[IndirectDrawBufferIndex] = LodCountBufferSRV_1[EntityLodCountBufferIndex];
+    IndirectDrawCommandBufferUAV[IndirectDrawInstanceCountIndex] = LodCountBufferSRV_1[EntityLodCountBufferIndex];
 }
 
 

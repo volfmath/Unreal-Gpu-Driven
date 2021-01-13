@@ -8,8 +8,9 @@ Test code for gpu driven in unreal
   - [x] Compute Shader for Frustum Culling
   - [x] Hiz Occlusion Culling
   - [ ] Calculate Lod and update indirectDraw FirstInstance
+  - [ ] Delete shadow variable
 - [ ] Support HISM
   - [x] Construct the Cluster
   - [x] Rewrite GetDynamicElement
-  - [ ] Distance Culling
-  - [ ] HISM Lod Calculate
+  - [x] Distance Culling
+  - [ ] HISM Lod Calculate，Support different Scalebound

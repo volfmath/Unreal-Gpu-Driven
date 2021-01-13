@@ -3549,7 +3549,8 @@ void UInstancedStaticMeshComponent::OnRegister() {
 	bool bIsValidObject = !HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject);
 	ERHIFeatureLevel::Type FeatureLevel = GetWorld()->FeatureLevel.GetValue();
 	const bool bUseGpuDriven = bIsValidObject && (FeatureLevel == ERHIFeatureLevel::Type::ES3_1) && FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this) && FMobileGPUDrivenSystem::IsGPUDrivenWorld(GetWorld());
-	if (bUseGpuDriven) {
+	const bool HasValidData = PerInstanceSMData.Num() > 0;
+	if (bUseGpuDriven && HasValidData) {
 		SetGpuDrivenIsValid(true);
 		BuildGpuDrivenCluster();
 		FMobileGPUDrivenSystem::RegisterEntity(this);
@@ -3602,6 +3603,7 @@ void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementSha
 
 	ShaderBindings.Add(Shader->GetUniformBufferParameter<FInstancedStaticMeshVertexFactoryUniformShaderParameters>(), InstancedVertexFactory->GetUniformBuffer());
 
+	//#TODO: Remove don't need?
 	FIntPoint InstanceToRenderStartIndexAndIsShadowParameter = FIntPoint(InstancingUserData->InstanceToRenderStartIndex, InstancingUserData->bIsShadow);
 	ShaderBindings.Add(InstanceToRenderStartIndexAndIsShadow, InstanceToRenderStartIndexAndIsShadowParameter);	
 	ShaderBindings.Add(InstanceToRenderIndexBufferSRV, InstancingUserData->InstanceToRenderIndexBufferSRV);

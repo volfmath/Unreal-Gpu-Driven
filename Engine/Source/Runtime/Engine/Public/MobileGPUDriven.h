@@ -23,8 +23,11 @@ struct FClusterInputData_CPU {
 	uint32 LodBufferStartIndex;
 	uint32 ClusterInstanceCount;
 	uint32 InstanceBufferStartIndex;
-	uint32 MeshLodCount;
+
+	float CullDistance; //注意对齐16字节
 	FVector BoundCenter;
+
+	uint32 MeshLodCount;
 	FVector BoundExtent;
 };
 
@@ -75,6 +78,7 @@ struct FMeshEntity {
 		uint32 NumDrawElement,
 		uint32 UniqueObjectId,
 		uint32 UniqueWorldId,
+		float CullDistance,
 		TArray<uint32>&& SectionIndexCount,
 		TArray<uint32>&& SectionFirstIndex,
 		TArray<uint32>&& PerLodSectionCount,
@@ -93,6 +97,7 @@ struct FMeshEntity {
 	uint32 NumDrawElement;
 	uint32 UniqueObjectId;
 	uint32 UniqueWorldId; //用于记录注册时的WorldId
+	float CullDistance;
 	TArray<uint32> SectionIndexCount;
 	TArray<uint32> SectionFirstIndex;
 	TArray<uint32> PerLodSectionCount;

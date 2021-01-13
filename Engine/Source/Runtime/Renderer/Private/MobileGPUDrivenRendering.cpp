@@ -48,7 +48,9 @@ public:
 	FMobileGpuCullingCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer) {
 		TotalClusterCount.Bind(Initializer.ParameterMap, TEXT("TotalClusterCount"));
+		ViewOriginPosition.Bind(Initializer.ParameterMap, TEXT("ViewOriginPosition"));
 		ViewFrustumPermutedPlanes.Bind(Initializer.ParameterMap, TEXT("ViewFrustumPermutedPlanes"));
+		ProjMatrixXY.Bind(Initializer.ParameterMap, TEXT("ProjMatrixXY"));
 		PreViewProjectMatrix.Bind(Initializer.ParameterMap, TEXT("LastFrameViewProjectMatrix"));
 		HzbResource_SRV.Bind(Initializer.ParameterMap, TEXT("HzbResource"));
 		ClusterData_SRV.Bind(Initializer.ParameterMap, TEXT("InputClusterBufferSRV"));
@@ -63,7 +65,15 @@ public:
 
 	void BindParameters(FRHICommandList& RHICmdList, const FViewInfo& View, FMobileGPUDrivenSystem* GpuDrivenSystem, FRHITexture* InHzbResource) {
 		SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), TotalClusterCount, GpuDrivenSystem->CurTotalClusterCount);
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), ViewOriginPosition, View.ViewMatrices.GetViewOrigin());
 		SetShaderValueArray(RHICmdList, RHICmdList.GetBoundComputeShader(), ViewFrustumPermutedPlanes, View.ViewFrustum.PermutedPlanes.GetData(), View.ViewFrustum.PermutedPlanes.Num());//#TODO: 去掉远近平面? 
+
+		{
+			const auto& ProjMatrix = View.ViewMatrices.GetProjectionMatrix();
+			FVector2D ProjMatrixValue = FVector2D(ProjMatrix.M[0][0], ProjMatrix.M[1][1]);
+			SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), ProjMatrixXY, ProjMatrixValue);
+		}
+
 		SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), PreViewProjectMatrix, View.PrevViewInfo.ViewMatrices.GetViewProjectionMatrix()); //Last Frame
 
 		SetTextureParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), HzbResource_SRV, InHzbResource);
@@ -81,8 +91,11 @@ public:
 	}
 
 private:
+	//#TODO: Batch?
 	LAYOUT_FIELD(FShaderParameter, TotalClusterCount);
+	LAYOUT_FIELD(FShaderParameter, ViewOriginPosition);
 	LAYOUT_FIELD(FShaderParameter, ViewFrustumPermutedPlanes);
+	LAYOUT_FIELD(FShaderParameter, ProjMatrixXY);
 	LAYOUT_FIELD(FShaderParameter, PreViewProjectMatrix);
 	LAYOUT_FIELD(FShaderResourceParameter, HzbResource_SRV)
 	LAYOUT_FIELD(FShaderResourceParameter, ClusterData_SRV);
