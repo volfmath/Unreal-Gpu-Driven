@@ -15,13 +15,13 @@ struct ClusterInputData
 {   
     uint FirstRenderIndex;
     uint LodBufferStartIndex;
-    uint ClusterInstanceCount;
+    uint ClusterInstanceCountAndLodCount;
     uint InstanceBufferStartIndex;  
     
     float CullDistance; //注意对齐16字节
     float3 BoundCenter;
     
-    uint MeshLodCount;
+    float ScaledBoundSphereRadius;
     float3 BoundExtent;
 };
 
@@ -37,6 +37,7 @@ struct ClusterOutputData
 uint TotalClusterCount;
 float3 ViewOriginPosition;
 float4 ViewFrustumPermutedPlanes[8]; 
+float4 ViewNearClippingPlane;
 float2 ProjMatrixXY;
 float4x4 LastFrameViewProjectMatrix;
 
@@ -49,7 +50,7 @@ RWStructuredBuffer<ClusterOutputData> OutputClusterBufferUAV;
 RWBuffer<uint> EntityLodCountBufferUAV;
 
 
-uint GetClusterLod(in float3 BoundMin, in float3 BoundMax, in uint MeshLodCount, in uint LodBufferStartIndex)
+uint GetClusterLod(in float3 BoundMin, in float3 BoundMax, in uint MeshLodCount, in uint LodBufferStartIndex, in float ScaledBoundSphereRadius, in float CullDis)
 {
     float3 Center = (BoundMin + BoundMax) * 0.5f;
     float BoundHalfExtent = distance(BoundMin, BoundMax) * 0.5f; //#TODO: Lod使用StaticMesh的Bound计算
@@ -61,18 +62,23 @@ uint GetClusterLod(in float3 BoundMin, in float3 BoundMax, in uint MeshLodCount,
     uint CurLod = MeshLodCount - 1;
 
     LOOP
-    for (int Index = MeshLodCount - 1; Index >= 0; --Index)
+    for (int Index = MeshLodCount - 1; Index > 0; --Index)
     {
-        uint CurLodIndex = LodBufferStartIndex + Index;
-        
-        float ScreenSize = LodDataBuffre[CurLodIndex];
+        uint CurLodBufferIndex = LodBufferStartIndex + Index;
+
+        float ScreenSize = LodDataBuffre[CurLodBufferIndex];
  
         // ScreenSize is the projected diameter, so halve it
         float ScreenRadius = max(SMALL_NUMBER, ScreenSize * 0.5f);
-        float DrawDistance = (ScreenMultiple * BoundHalfExtent) * rcp(ScreenRadius);
-        if (FarDistance < DrawDistance)
+        float DrawDistance = (ScreenMultiple * ScaledBoundSphereRadius) * rcp(ScreenRadius);
+        float FinalDis = min(DrawDistance, CullDis);
+        
+        if (FarDistance < FinalDis)
         {
-            CurLod = Index;
+            CurLod -= 1;
+        }
+        else
+        {
             break;
         }
     }
@@ -95,7 +101,7 @@ bool DistanceCulling(in float3 BoundMin, in float3 BoundMax, in float CullDistan
    return true;
 }
 
-bool IntersectBox8Plane(in float3 Center, in float3 Extent)
+bool IntersectBox8Plane(in float3 Center, in float3 Extent, out bool InsideNearPlane)
 {
     float4 DistX_0 = Center.xxxx * ViewFrustumPermutedPlanes[0];
     float4 DistY_0 = Center.yyyy * ViewFrustumPermutedPlanes[1] + DistX_0;
@@ -111,6 +117,9 @@ bool IntersectBox8Plane(in float3 Center, in float3 Extent)
         return false;
     }
 
+    //是否完全在进平面内部
+    InsideNearPlane = Distance_0.x < -PushOut_0.x;
+    
     float4 DistX_1 = Center.xxxx * ViewFrustumPermutedPlanes[4];
     float4 DistY_1 = Center.yyyy * ViewFrustumPermutedPlanes[5] + DistX_1;
     float4 DistZ_1 = Center.zzzz * ViewFrustumPermutedPlanes[6] + DistY_1;
@@ -124,6 +133,7 @@ bool IntersectBox8Plane(in float3 Center, in float3 Extent)
     {
         return false;
     }
+    
     
     return true;
 }
@@ -142,7 +152,6 @@ bool HzbTest(in float3 BoundMin, in float3 BoundMax)
 //  The comparison NE, when either or both operands is NaN returns TRUE.
 //  Comparisons of any non-NaN value against +/- INF return the correct result.
     
-
     float3 Bounds[2] = { BoundMin, BoundMax };
     
     // Screen rect from bounds
@@ -234,7 +243,8 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
             return;
         }
         
-        bool bIsFrustumVisible = IntersectBox8Plane(RenderData.BoundCenter, RenderData.BoundExtent);
+        bool InsideNearPlane;
+        bool bIsFrustumVisible = IntersectBox8Plane(RenderData.BoundCenter, RenderData.BoundExtent, InsideNearPlane);
         if (!bIsFrustumVisible)
         {
             OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
@@ -242,7 +252,17 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         }
 
         //Hiz Culling
-        bool bIsOcclusionVisible = HzbTest(BoundsMin, BoundsMax);
+        bool bIsOcclusionVisible;
+        BRANCH
+        if (InsideNearPlane)
+        {
+            bIsOcclusionVisible = HzbTest(BoundsMin, BoundsMax);
+        }
+        else
+        {
+            bIsOcclusionVisible = true;
+        }
+        
         if (!bIsOcclusionVisible)
         {
             OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
@@ -250,15 +270,17 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         }
 
         //CalcLod
-        uint CurLodIndex = /*GetClusterLod(BoundsMin, BoundsMax, RenderData.MeshLodCount, RenderData.LodBufferStartIndex)*/0;
+        uint MeshCount = RenderData.ClusterInstanceCountAndLodCount >> 16;
+        uint ClusterInstanceCount = RenderData.ClusterInstanceCountAndLodCount & 0xFFFF;
+        uint CurLodIndex = GetClusterLod(BoundsMin, BoundsMax, MeshCount, RenderData.LodBufferStartIndex, RenderData.ScaledBoundSphereRadius, RenderData.CullDistance);
         uint LodCountBufferIndex = RenderData.LodBufferStartIndex + CurLodIndex;
         uint CurLodCount = 0;
-        InterlockedAdd(EntityLodCountBufferUAV[LodCountBufferIndex], RenderData.ClusterInstanceCount, CurLodCount);
+        InterlockedAdd(EntityLodCountBufferUAV[LodCountBufferIndex], ClusterInstanceCount, CurLodCount);
         
         //Write Cluster Data
         OutputRenderData.FirstRenderIndex = RenderData.FirstRenderIndex;
         OutputRenderData.LodBufferStartIndex = RenderData.LodBufferStartIndex;
-        OutputRenderData.ClusterInstanceCountAndLodIndex = RenderData.ClusterInstanceCount | (CurLodIndex << 16);
+        OutputRenderData.ClusterInstanceCountAndLodIndex = ClusterInstanceCount | (CurLodIndex << 16);
         OutputRenderData.InstanceBufferStartIndexAddLodCount = RenderData.InstanceBufferStartIndex + CurLodCount;
     }
     OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
@@ -300,19 +322,28 @@ void MobileUpdateInstanceIndexBuffer(uint DispatchThreadId : SV_DispatchThreadID
 }
 
 //[Input]
-Buffer<uint> IndirectDrawToLodIndexBufferSRV;
+Buffer<uint2> IndirectDrawToLodIndexBufferSRV;
 Buffer<uint> LodCountBufferSRV_1;
 
 //[Output]
 RWBuffer<uint> IndirectDrawCommandBufferUAV;
+RWBuffer<uint> FirstInstanceIndexBufferUAV;
 
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileIndirectDrawUpdate(uint DispatchThreadId : SV_DispatchThreadID)
 {
     uint IndirectDrawInstanceCountIndex = DispatchThreadId * 5 + 1; //InstanceCount
-    uint IndirectDrawFirstIndex = DispatchThreadId * 5 + 4;
-    uint EntityLodCountBufferIndex = IndirectDrawToLodIndexBufferSRV[DispatchThreadId];
-    IndirectDrawCommandBufferUAV[IndirectDrawInstanceCountIndex] = LodCountBufferSRV_1[EntityLodCountBufferIndex];
+    uint2 LodBufferIndexAndLodIndex = IndirectDrawToLodIndexBufferSRV[DispatchThreadId];
+    
+    uint FirstInstanceIndex = 0;
+    LOOP
+    for (uint i = 1; i <= LodBufferIndexAndLodIndex.y; ++i)
+    {
+        FirstInstanceIndex += LodCountBufferSRV_1[LodBufferIndexAndLodIndex.x - i];
+    }
+    
+    IndirectDrawCommandBufferUAV[IndirectDrawInstanceCountIndex] = LodCountBufferSRV_1[LodBufferIndexAndLodIndex.x];
+    FirstInstanceIndexBufferUAV[DispatchThreadId] = FirstInstanceIndex;
 }
 
 

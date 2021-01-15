@@ -7,6 +7,7 @@ class UStaticMesh;
 
 
 extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven;
+DECLARE_LOG_CATEGORY_EXTERN(MobileGpuDriven, Warning, All);
 
 /**----------------------Gpu Struct Layout----------------------*/
 struct FDrawIndirectCommandArgs_CPU {
@@ -21,13 +22,13 @@ struct FDrawIndirectCommandArgs_CPU {
 struct FClusterInputData_CPU {
 	uint32 FirstRenderIndex;
 	uint32 LodBufferStartIndex;
-	uint32 ClusterInstanceCount;
+	uint32 ClusterInstanceCountAndLodCount;
 	uint32 InstanceBufferStartIndex;
 
 	float CullDistance; //注意对齐16字节
 	FVector BoundCenter;
 
-	uint32 MeshLodCount;
+	float ScaledBoundSphereRadius;
 	FVector BoundExtent;
 };
 
@@ -36,6 +37,11 @@ struct FClusterOutputData_CPU {
 	uint32 LodBufferStartIndex;
 	uint32 ClusterInstanceCountAndLodIndex; //压缩到16字节
 	uint32 InstanceBufferStartIndexAddLodCount; //压缩到16字节
+};
+
+struct FDrawLodParameter_CPU {
+	uint16 LodBufferIndex;
+	uint16 LodLevel;
 };
 
 namespace SLGPUDrivenParameter {
@@ -53,10 +59,10 @@ struct FGpuDrivenInstancingUserData
 	FGpuDrivenInstancingUserData(UInstancedStaticMeshComponent* InstanceComponent)
 		: bRenderSelected(true)
 		, bRenderUnselected(true)
-		, bIsShadow(true)
 		, StartCullDistance(InstanceComponent->InstanceStartCullDistance)
 		, EndCullDistance(InstanceComponent->InstanceEndCullDistance)
 		, InstanceToRenderStartIndex(0xFFFFFFFF)
+		, FirstInstanceIndexBufferSRV(nullptr)
 		, InstanceToRenderIndexBufferSRV(nullptr)
 	{
 
@@ -64,11 +70,10 @@ struct FGpuDrivenInstancingUserData
 
 	bool bRenderSelected;
 	bool bRenderUnselected;
-	bool bIsShadow;
-
 	int32 StartCullDistance;
 	int32 EndCullDistance;
 	uint32 InstanceToRenderStartIndex;
+	FRHIShaderResourceView* FirstInstanceIndexBufferSRV;
 	FRHIShaderResourceView* InstanceToRenderIndexBufferSRV;
 };
 
@@ -103,7 +108,7 @@ struct FMeshEntity {
 	TArray<uint32> PerLodSectionCount;
 	TArray<float> ScreenLODs;
 	TSharedPtr<TArray<FGpuDrivenCluster>, ESPMode::ThreadSafe> GpuDrivenCluster;
-	uint32 IndirectArgsStartIndex;
+	uint32 IndirectDrawStartIndex;
 	FGpuDrivenInstancingUserData GpuDriven_UserData;
 };
 
@@ -161,6 +166,7 @@ struct FMobileGPUDrivenSystem {
 	//[Output Resources]
 	FRWBuffer IndirectDrawCommandBuffer_GPU;
 	FRWBuffer EntityLodBufferCount_GPU;
+	FRWBuffer IndirectDrawFirstInstanceIndex_GPU;
 	FRWBufferStructured ClusterOutputData_GPU;
 	FRWBufferStructured InstanceToRenderIndexBuffer_GPU;
 	

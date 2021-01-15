@@ -464,8 +464,9 @@ public:
 		FLocalVertexFactoryShaderParametersBase::Bind(ParameterMap);
 		InstancingFadeOutParamsParameter.Bind(ParameterMap, TEXT("InstancingFadeOutParams"));
 		InstancingOffsetParameter.Bind(ParameterMap, TEXT("InstancingOffset")); //Stay for compatibility 
-		InstanceToRenderStartIndexAndIsShadow.Bind(ParameterMap, TEXT("InstanceToRenderStartIndexAndIsShadow"));
+		InstanceToRenderStartIndexAndDrawIndex.Bind(ParameterMap, TEXT("InstanceToRenderStartIndexAndDrawIndex"));
 		InstanceToRenderIndexBufferSRV.Bind(ParameterMap, TEXT("InstanceToRenderIndexBufferSRV"));
+		FirstInstanceIndexBufferSRV.Bind(ParameterMap, TEXT("FirstInstanceIndexBufferSRV"));
 	}
 
 	void GetElementShaderBindings(
@@ -483,8 +484,9 @@ public:
 private:
 	LAYOUT_FIELD(FShaderParameter, InstancingFadeOutParamsParameter)
 	LAYOUT_FIELD(FShaderParameter, InstancingOffsetParameter);
-	LAYOUT_FIELD(FShaderParameter, InstanceToRenderStartIndexAndIsShadow);
+	LAYOUT_FIELD(FShaderParameter, InstanceToRenderStartIndexAndDrawIndex);
 	LAYOUT_FIELD(FShaderResourceParameter, InstanceToRenderIndexBufferSRV);
+	LAYOUT_FIELD(FShaderResourceParameter, FirstInstanceIndexBufferSRV);
 };
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -677,7 +679,7 @@ public:
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	static bool UseMobileGPUDriven(UInstancedStaticMeshComponent* InComponent);
 	void SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent);
-	void SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch, const FMeshEntity& MeshEntity, FMobileGPUDrivenSystem* CurrentSystem) const;
+	void SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch, uint32 StartIndirectDrawIndex, FMobileGPUDrivenSystem* CurrentSystem) const;
 	//#TODO: No longer need DrawStaticElement unless VT
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 

@@ -37,15 +37,18 @@
 
 float4 InstancingOffset;
 float4 InstancingFadeOutParams;
+//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	#if MOBILE_INSTANCE_MANUALFETCH
-		uint2 InstanceToRenderStartIndexAndIsShadow;
+		uint2 InstanceToRenderStartIndexAndDrawIndex;
 		StructuredBuffer<uint> InstanceToRenderIndexBufferSRV;
+		Buffer<uint> FirstInstanceIndexBufferSRV;
 		uint GetRenderIndex(uint InstanceId)
 		{
-			uint RemapInstanceIndex = InstanceToRenderStartIndexAndIsShadow.x + InstanceId;
+			uint RemapInstanceIndex = InstanceToRenderStartIndexAndDrawIndex.x + InstanceId + FirstInstanceIndexBufferSRV[InstanceToRenderStartIndexAndDrawIndex.y];
 			return InstanceToRenderIndexBufferSRV[RemapInstanceIndex];
 		}
 	#endif
+//@StarLight code - END GPU-Driven, Added by yanjianhong
 #endif	// USE_INSTANCING
 
 
@@ -368,11 +371,7 @@ float4x4 GetInstanceTransform(FPositionOnlyVertexFactoryInput Input)
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	#elif MOBILE_INSTANCE_MANUALFETCH	
 		uint InstanceId = GetInstanceId(Input.InstanceId);
-		BRANCH
-		if(InstanceToRenderStartIndexAndIsShadow.y == 0)
-		{
-			InstanceId = GetRenderIndex(InstanceId);
-		}
+		InstanceId = GetRenderIndex(InstanceId);
 		return float4x4(
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
@@ -409,11 +408,7 @@ float4x4 GetInstanceTransform(FPositionAndNormalOnlyVertexFactoryInput Input)
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	#elif MOBILE_INSTANCE_MANUALFETCH
 		uint InstanceId = GetInstanceId(Input.InstanceId);
-		BRANCH
-		if(InstanceToRenderStartIndexAndIsShadow.y == 0)
-		{
-			InstanceId = GetRenderIndex(InstanceId);
-		}
+		InstanceId = GetRenderIndex(InstanceId);
 		return float4x4(
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
 			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
@@ -824,11 +819,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 #elif MOBILE_INSTANCE_MANUALFETCH
 	uint InstanceId = GetInstanceId(Input.InstanceId);
-	BRANCH
-	if(InstanceToRenderStartIndexAndIsShadow.y == 0)
-	{
-		InstanceId = GetRenderIndex(InstanceId);
-	}
+	InstanceId = GetRenderIndex(InstanceId);
 	Intermediates.InstanceTransform1 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0];
 	Intermediates.InstanceTransform2 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1];
 	Intermediates.InstanceTransform3 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2];

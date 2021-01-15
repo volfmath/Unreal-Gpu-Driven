@@ -4,11 +4,13 @@
 
 ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
 	TEXT("r.Mobile.GpuDriven"),
-	1,
+	0,
 	TEXT("Whether to allow gpudriven.\n"),
 	ECVF_Scalability
 );
 
+
+DEFINE_LOG_CATEGORY(MobileGpuDriven);
 
 //--------------------------------Static Function--------------------------------
 TMap<uint32, FMobileGPUDrivenSystem*> FMobileGPUDrivenSystem::WorldIndexToSystemMap_GameThread; //逻辑线程只负责创建
@@ -190,7 +192,7 @@ FMeshEntity::FMeshEntity
 	, PerLodSectionCount(MoveTemp(InPerLodSectionCount))
 	, ScreenLODs(MoveTemp(InScreenLODs))
 	, GpuDrivenCluster(InGpuDrivenCluster)
-	, IndirectArgsStartIndex(0)
+	, IndirectDrawStartIndex(0)
 	, GpuDriven_UserData(UserData)
 {
 	check(GpuDrivenCluster.IsValid());
@@ -207,7 +209,7 @@ FMeshEntity::FMeshEntity(const FMeshEntity& CopyMeshEntity)
 	, PerLodSectionCount(CopyMeshEntity.PerLodSectionCount)
 	, ScreenLODs(CopyMeshEntity.ScreenLODs)
 	, GpuDrivenCluster(CopyMeshEntity.GpuDrivenCluster)
-	, IndirectArgsStartIndex(CopyMeshEntity.IndirectArgsStartIndex)
+	, IndirectDrawStartIndex(CopyMeshEntity.IndirectDrawStartIndex)
 	, GpuDriven_UserData(CopyMeshEntity.GpuDriven_UserData)
 {
 	check(false);
@@ -224,7 +226,7 @@ FMeshEntity::FMeshEntity(FMeshEntity&& CopyMeshEntity)
 	, PerLodSectionCount(MoveTemp(CopyMeshEntity.PerLodSectionCount))
 	, ScreenLODs(MoveTemp(CopyMeshEntity.ScreenLODs))
 	, GpuDrivenCluster(CopyMeshEntity.GpuDrivenCluster)
-	, IndirectArgsStartIndex(CopyMeshEntity.IndirectArgsStartIndex)
+	, IndirectDrawStartIndex(CopyMeshEntity.IndirectDrawStartIndex)
 	, GpuDriven_UserData(CopyMeshEntity.GpuDriven_UserData)
 {
 	check(GpuDrivenCluster.IsValid());
@@ -237,6 +239,24 @@ FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* Instanc
 
 	UStaticMesh* StaticMesh = InstanceComponent->GetStaticMesh();
 	const auto& StaticMeshRenderDta = StaticMesh->RenderData;
+
+	//确保Lod总是从0开始,没有平台偏移
+	const int32 SMCurrentMinLOD = InstanceComponent->GetStaticMesh()->MinLOD.GetValueForFeatureLevel(ERHIFeatureLevel::Type::ES3_1);
+	check(!InstanceComponent->bOverrideMinLOD);
+	int FirstAvailableLOD = 0;
+	for (; FirstAvailableLOD < StaticMeshRenderDta->LODResources.Num(); FirstAvailableLOD++)
+	{
+		if (StaticMeshRenderDta->LODResources[FirstAvailableLOD].GetNumVertices() > 0)
+		{
+			break;
+		}
+	}
+	check(FirstAvailableLOD == 0);
+
+	if (SMCurrentMinLOD != 0) {
+		UE_LOG(MobileGpuDriven, Warning, TEXT("%s StartLod is not 0"), *StaticMesh->GetName());
+	}
+	
 	uint32 NumLod = StaticMeshRenderDta->LODResources.Num();
 	uint32 NumDrawElement = 0;
 	uint32 UniqueObjectId = InstanceComponent->GetUniqueID();
@@ -265,6 +285,7 @@ FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* Instanc
 			SectionIndexCount.Emplace(Section.NumTriangles * 0x3);
 			SectionFirstIndex.Emplace(Section.FirstIndex);
 		}
+
 		float LodScreenSize = StaticMeshRenderDta->ScreenSize[Lod].GetValueForFeatureLevel(ERHIFeatureLevel::Type::ES3_1);
 		ScreenLODs.Emplace(LodScreenSize);
 		NumDrawElement += NumSection;
@@ -274,6 +295,8 @@ FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* Instanc
 
 	//grass.CullDistanceScale已经在InstanceEndCullDistance其中赋值,所以不处理GGrassCullDistanceScale
 	float InstanceCullDis = InstanceComponent->InstanceEndCullDistance * GetCachedScalabilityCVars().ViewDistanceScale;
+	//#TODO: ensure
+	InstanceCullDis = InstanceCullDis > 0.f ? InstanceCullDis : 200000.f;
 
 	return FMeshEntity(
 		NumLod, 
@@ -317,6 +340,7 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 		ClusterInputData_GPU.Release();
 		IndirectDrawCommandBuffer_GPU.Release();
 		EntityLodBufferCount_GPU.Release();
+		IndirectDrawFirstInstanceIndex_GPU.Release();
 		ClusterOutputData_GPU.Release();
 		InstanceToRenderIndexBuffer_GPU.Release();
 	}
@@ -327,19 +351,21 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 
 	//#TODO: TaskGraph
 	TArray<FDrawIndirectCommandArgs_CPU> IndirectDrawCommandBuffer_CPU;
-	TArray<uint32> IndirectDrawToLodIndexBuffer_CPU;
+	TArray<FDrawLodParameter_CPU> IndirectDrawToLodIndexBuffer_CPU;
 	TArray<FClusterInputData_CPU> ClusterData_CPU;
 	TArray<float> EntityLodScreenBuffer_CPU;
 	uint32 CurTotalInstanceCount = 0;
+	//uint32 SingleComponentMaxInstanceCount = 0;
 
 	for (auto& ProxyEntity : Entities) {
 		const auto& ClusterArray = *ProxyEntity.GpuDrivenCluster;
 		uint32 NumRenderCluster = ClusterArray.Num();
+		//uint32 LocalInstanceCount = 0;
 
 		//Update Entity parameters
 		{
 			ProxyEntity.GpuDriven_UserData.InstanceToRenderStartIndex = CurTotalInstanceCount; 
-			ProxyEntity.IndirectArgsStartIndex = IndirectDrawCommandBuffer_CPU.Num() * SLGPUDrivenParameter::IndirectCommandSize; //Set IndirectStartIndex
+			ProxyEntity.IndirectDrawStartIndex = IndirectDrawCommandBuffer_CPU.Num(); //Set IndirectStartIndex
 		}
 
 		//About ClusterBuffer
@@ -355,15 +381,17 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 				auto& ClusterDataBuffer = ClusterData_CPU[ClusterIndex];
 				ClusterDataBuffer.FirstRenderIndex = CurCluster.FirstRenderIndex;
 				ClusterDataBuffer.LodBufferStartIndex = CurTotalLodCount;
-				check(CurCluster.ClusterInstanceCount >= 1 && CurCluster.ClusterInstanceCount <= 65535); //确保不为空并且压缩在8位内
-				ClusterDataBuffer.ClusterInstanceCount = CurCluster.ClusterInstanceCount;
+				check(CurCluster.ClusterInstanceCount >= 1 && CurCluster.ClusterInstanceCount <= 65535); //确保不为空并且压缩在16位内
+				ClusterDataBuffer.ClusterInstanceCountAndLodCount = (ProxyEntity.NumLod << 16) | (CurCluster.ClusterInstanceCount);
 				ClusterDataBuffer.InstanceBufferStartIndex = LocalStartInstanceIndex;	
 				ClusterDataBuffer.CullDistance = ProxyEntity.CullDistance;
 				ClusterDataBuffer.BoundCenter = CurCluster.BoundCenter;
-				ClusterDataBuffer.MeshLodCount = ProxyEntity.NumLod;
+				ClusterDataBuffer.ScaledBoundSphereRadius = CurCluster.ScaledBoundSphereRadius;
 				ClusterDataBuffer.BoundExtent = CurCluster.BoundExtent;
 				LocalClusterIndex += 1;
 				CurTotalInstanceCount += CurCluster.ClusterInstanceCount;
+
+				//LocalInstanceCount += CurCluster.ClusterInstanceCount;
 			}
 		}
 
@@ -386,7 +414,7 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 
 			int32 LocalIndirectDrawIndex = 0;
 			int32 LocalLodIndex = 0;
-			int32 LocalSectionIndex = 0;
+			int32 CurSectionCount = 0;
 
 			IndirectDrawCommandBuffer_CPU.AddZeroed(ProxyEntity.NumDrawElement);
 			IndirectDrawToLodIndexBuffer_CPU.AddZeroed(ProxyEntity.NumDrawElement); 
@@ -397,15 +425,17 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 				DrawCommandBuffer.InstanceCount = NumRenderCluster;
 				DrawCommandBuffer.FirstIndex = ProxyEntity.SectionFirstIndex[LocalIndirectDrawIndex];
 				DrawCommandBuffer.VertexOffset = 0;
-				DrawCommandBuffer.FirstInstance = 0; //GPU Write
+				DrawCommandBuffer.FirstInstance = 1; //GPU Write
 				LocalIndirectDrawIndex += 1;
 
 				auto& IndirectDrawToLodIndex = IndirectDrawToLodIndexBuffer_CPU[DrawElementIndex];
-				IndirectDrawToLodIndex = LocalLodIndex + CurTotalLodCount;
-				LocalSectionIndex += 1;
-				if (ProxyEntity.PerLodSectionCount[LocalLodIndex] == LocalSectionIndex) {
+				IndirectDrawToLodIndex.LodBufferIndex = static_cast<uint16>(LocalLodIndex + CurTotalLodCount);
+				IndirectDrawToLodIndex.LodLevel = LocalLodIndex;
+
+				CurSectionCount += 1;
+				if (ProxyEntity.PerLodSectionCount[LocalLodIndex] == CurSectionCount) {
 					LocalLodIndex += 1;
-					LocalSectionIndex = 0;
+					CurSectionCount = 0;
 				}
 			}
 		}
@@ -414,7 +444,13 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 		CurTotalClusterCount += NumRenderCluster;
 		CurTotalLodCount += ProxyEntity.NumLod;
 		CurTotalIndirectDrawCount += ProxyEntity.NumDrawElement;
+
+		//SingleComponentMaxInstanceCount = FMath::Max(LocalInstanceCount, SingleComponentMaxInstanceCount);
 	}
+
+	check(CurTotalLodCount == EntityLodScreenBuffer_CPU.Num());
+	check(CurTotalLodCount <= 65535); //因为IndirectDrawToLodIndexBuffer存储Index使用16位
+	//check(SingleComponentMaxInstanceCount <= 65535);
 
 	//Write data to GPU
 	if(Entities.Num() != 0)
@@ -434,36 +470,23 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 		FMemory::Memcpy(IndirectBufferData, IndirectDrawCommandBuffer_CPU.GetData(), IndirectDrawCommandBuffer_GPU.NumBytes);
 		RHIUnlockVertexBuffer(IndirectDrawCommandBuffer_GPU.Buffer);
 
-		IndirectDrawToLodIndexBuffer_GPU.Initialize(sizeof(uint32), IndirectDrawToLodIndexBuffer_CPU.Num(), PF_R32_UINT, BUF_Static);
+		IndirectDrawToLodIndexBuffer_GPU.Initialize(sizeof(FDrawLodParameter_CPU), IndirectDrawToLodIndexBuffer_CPU.Num(), PF_R16G16_UINT, BUF_Static);
 		void* IndirectDrawToLodIndexBufferData = RHILockVertexBuffer(IndirectDrawToLodIndexBuffer_GPU.Buffer, 0, IndirectDrawToLodIndexBuffer_GPU.NumBytes, RLM_WriteOnly);
 		FMemory::Memcpy(IndirectDrawToLodIndexBufferData, IndirectDrawToLodIndexBuffer_CPU.GetData(), IndirectDrawToLodIndexBuffer_GPU.NumBytes);
 		RHIUnlockVertexBuffer(IndirectDrawToLodIndexBuffer_GPU.Buffer);
 
 		ClusterOutputData_GPU.Initialize(sizeof(FClusterOutputData_CPU), CurTotalClusterCount, BUF_Static);
-		EntityLodBufferCount_GPU.Initialize(sizeof(uint32), CurTotalLodCount, PF_R32_UINT, BUF_Static);
+		EntityLodBufferCount_GPU.Initialize(sizeof(uint32), CurTotalLodCount, PF_R32_UINT, BUF_Static); //#TODO: R16
+		IndirectDrawFirstInstanceIndex_GPU.Initialize(sizeof(uint32), CurTotalIndirectDrawCount, PF_R32_UINT, BUF_Static); //#TODO: R16
 		InstanceToRenderIndexBuffer_GPU.Initialize(sizeof(uint32), CurTotalInstanceCount, BUF_Static);
-
-		check(CurTotalLodCount == EntityLodScreenBuffer_CPU.Num());
 	}
 
+	//Set Vertex Shader SRV
 	for (auto& ProxyEntity : Entities) {
+		ProxyEntity.GpuDriven_UserData.FirstInstanceIndexBufferSRV = IndirectDrawFirstInstanceIndex_GPU.SRV.GetReference();
 		ProxyEntity.GpuDriven_UserData.InstanceToRenderIndexBufferSRV = InstanceToRenderIndexBuffer_GPU.SRV.GetReference();
 	}
 }
-
-////#TODO: GPU Driven统一走Dynamic收集MeshDrawCommand, 可移除
-//void FMobileGPUDrivenSystem::MarkAllComponentsDirty(){
-//	check(IsInGameThread());
-//
-//	for (uint32 i = 0; i < static_cast<uint32>(EntitiesComponents.Num()); ++i) {
-//		//无效值跳过, 其会被卸载, 跑到渲染线程时不会使用这样的UObject
-//		//因为GPUBuffer的替换, 所有Component需要重新创建渲染状态
-//		//如果Componetn已经被标记为Dirty内部会自动跳过
-//		if (EntitiesComponents[i].EntityComponent.IsValid()) {
-//			EntitiesComponents[i].EntityComponent->MarkRenderStateDirty();
-//		}
-//	}
-//}
 
 const FMeshEntity& FMobileGPUDrivenSystem::GetMeshEntityByUniqueId(uint32 UniqueObjectIndex) const {
 	const uint32 EntityIndex_RenderThread = UniqueIdToEntityIndex_RenderThread.FindChecked(UniqueObjectIndex);

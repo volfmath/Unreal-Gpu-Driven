@@ -540,11 +540,16 @@ void FStaticMeshInstanceBuffer::BindManualFetchVertexBuffer(const class FVertexF
 			InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
 		}
 		else {
-			InstancedStaticMeshData.InstanceOriginSRV = RHICreateShaderResourceView(InstanceOriginBuffer.VertexBufferRHI, 16, PF_A32B32G32R32F);
-			InstancedStaticMeshData.InstanceTransformSRV = RHICreateShaderResourceView(InstanceTransformBuffer.VertexBufferRHI, InstanceData->GetTranslationUsesHalfs() ? 8 : 16, InstanceData->GetTranslationUsesHalfs() ? PF_FloatRGBA : PF_A32B32G32R32F);
-			InstancedStaticMeshData.InstanceLightmapSRV = RHICreateShaderResourceView(InstanceLightmapBuffer.VertexBufferRHI, 8, PF_R16G16B16A16_SNORM);
+			//因为FStaticMeshInstanceBuffer没有标记表示是否使用GPUDriven
+			const_cast<FShaderResourceViewRHIRef&>(InstanceOriginSRV) = RHICreateShaderResourceView(InstanceOriginBuffer.VertexBufferRHI, 16, PF_A32B32G32R32F);
+			const_cast<FShaderResourceViewRHIRef&>(InstanceTransformSRV) = RHICreateShaderResourceView(InstanceTransformBuffer.VertexBufferRHI, InstanceData->GetTranslationUsesHalfs() ? 8 : 16, InstanceData->GetTranslationUsesHalfs() ? PF_FloatRGBA : PF_A32B32G32R32F);
+			const_cast<FShaderResourceViewRHIRef&>(InstanceLightmapSRV) = RHICreateShaderResourceView(InstanceLightmapBuffer.VertexBufferRHI, 8, PF_R16G16B16A16_SNORM);
+			InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
+			InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
+			InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
 			if (InstanceData->GetNumCustomDataFloats() > 0) {
-				InstancedStaticMeshData.InstanceCustomDataSRV = RHICreateShaderResourceView(InstanceCustomDataBuffer.VertexBufferRHI, 4, PF_R32_FLOAT);
+				const_cast<FShaderResourceViewRHIRef&>(InstanceCustomDataSRV) = RHICreateShaderResourceView(InstanceCustomDataBuffer.VertexBufferRHI, 4, PF_R32_FLOAT);
+				InstancedStaticMeshData.InstanceCustomDataSRV = InstanceCustomDataSRV;
 			}
 			else {
 				InstancedStaticMeshData.InstanceCustomDataSRV = GDummyFloatBuffer.ShaderResourceViewRHI;
@@ -960,11 +965,7 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 		//check(RuntimeVirtualTextureMaterialTypes.Num() == 0); //not support vt
 		//check(Views.Num() == 1);
 	
-		const FSceneView* View = Views[0];
-		auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
-		check(CurrentSystem);
-		const FMeshEntity& MeshEntity = CurrentSystem->GetMeshEntityByUniqueId(UniqueObjectId);
-
+		const FSceneView* View = Views[0];	
 		//让阴影走原始流程,创建两个VertexFactory?
 		if (View->GetDynamicMeshElementsShadowCullFrustum()) {
 			const int32 LODIndex = GetLOD(View);
@@ -973,19 +974,16 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 			for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++){
 				FMeshBatch& MeshElement = Collector.AllocateMesh();
 				if (FStaticMeshSceneProxy::GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, true, MeshElement)){
-
-					check(LODIndex < InstancedRenderData.ManualFetchVertexFactories.Num());
-
-					MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex]; //即使在shader中动态判断,但一个VS内的分支全部相同
+					check(LODIndex < InstancedRenderData.VertexFactories.Num());
+					MeshElement.VertexFactory = &InstancedRenderData.VertexFactories[LODIndex]; //即使在shader中动态判断,但一个VS内的分支全部相同
 					MeshElement.bCanApplyViewModeOverrides = true;
 					MeshElement.bUseSelectionOutline = false; //决定渲染Hit的参数
 					MeshElement.bUseWireframeSelectionColoring = false; //Wireframe下被选中是否使用颜色
 
 					const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 					FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
-					auto UserDataPtr = const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData);
-					UserDataPtr->bIsShadow = true;
-					BatchElement0.UserData = reinterpret_cast<void*>(UserDataPtr);
+					const FInstancingUserData* PassUserData = &UserData_AllInstances;
+					BatchElement0.UserData = PassUserData;
 					BatchElement0.bUserDataIsColorVertexBuffer = false;
 					BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
 					BatchElement0.UserIndex = 0; //Not needed used to Dithered
@@ -998,10 +996,18 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 			}
 		}
 		else {
+			auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
+			check(CurrentSystem);
+			const FMeshEntity& MeshEntity = CurrentSystem->GetMeshEntityByUniqueId(UniqueObjectId);
 			const int32 NumLod = StaticMesh->RenderData->LODResources.Num();
+			uint32 StartIndirectDrawIndex = MeshEntity.IndirectDrawStartIndex;
+			uint32 CurDrawOffset = 0;
 			for (int32 LODIndex = 0; LODIndex < NumLod; ++LODIndex) {
 				const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
 				for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++) {
+
+					CurDrawOffset += 1;
+
 					//Only one MeshBatch, one MeshBatchElement
 					FMeshBatch& MeshElement = Collector.AllocateMesh();
 					if (FStaticMeshSceneProxy::GetMeshElement(LODIndex, 0, SectionIndex, GetDepthPriorityGroup(View), false, false, MeshElement)) {
@@ -1015,16 +1021,16 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 
 						const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 						FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
+
 						auto UserDataPtr = const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData);
-						UserDataPtr->bIsShadow = false;
 						BatchElement0.UserData = reinterpret_cast<void*>(UserDataPtr);
 						BatchElement0.bUserDataIsColorVertexBuffer = false;
 						BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
-						BatchElement0.UserIndex = 0; //Not needed used to Dithered
+						BatchElement0.UserIndex = StartIndirectDrawIndex + CurDrawOffset - 1; //Not needed used to Dithered
 						BatchElement0.PrimitiveUniformBuffer = GetUniformBuffer();
 						BatchElement0.NumInstances = NumInstances;
 
-						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement, MeshEntity, CurrentSystem);
+						SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement, StartIndirectDrawIndex, CurrentSystem);
 						Collector.AddMesh(0, MeshElement);
 					}
 				}
@@ -1172,7 +1178,7 @@ void FInstancedStaticMeshSceneProxy::SetupProxy(UInstancedStaticMeshComponent* I
 }
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch, const FMeshEntity& MeshEntity, FMobileGPUDrivenSystem* CurrentSystem) const{
+void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, int32 SectionIndex, FMeshBatch& OutMeshBatch, uint32 StartIndirectDrawIndex, FMobileGPUDrivenSystem* CurrentSystem) const{
 	uint32 IndirectArgsOffset = 0;
 	for (uint32 i = 0; i < static_cast<uint32>(LODIndex); ++i) {
 		const FStaticMeshLODResources& LODModel = RenderData->LODResources[i];
@@ -1183,7 +1189,7 @@ void FInstancedStaticMeshSceneProxy::SetupIndirectDrawMeshBatch(int32 LODIndex, 
 	FMeshBatchElement& BatchElement0 = OutMeshBatch.Elements[0];
 	BatchElement0.NumPrimitives = 0;
 	BatchElement0.IndirectArgsBuffer = CurrentSystem->IndirectDrawCommandBuffer_GPU.Buffer;
-	BatchElement0.IndirectArgsOffset = MeshEntity.IndirectArgsStartIndex + IndirectArgsOffset;
+	BatchElement0.IndirectArgsOffset = StartIndirectDrawIndex * SLGPUDrivenParameter::IndirectCommandSize + IndirectArgsOffset;
 }
 
 void FInstancedStaticMeshSceneProxy::SetupGPUDrivenData(UInstancedStaticMeshComponent* InComponent) {
@@ -3549,6 +3555,12 @@ void UInstancedStaticMeshComponent::OnRegister() {
 	bool bIsValidObject = !HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject);
 	ERHIFeatureLevel::Type FeatureLevel = GetWorld()->FeatureLevel.GetValue();
 	const bool bUseGpuDriven = bIsValidObject && (FeatureLevel == ERHIFeatureLevel::Type::ES3_1) && FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this) && FMobileGPUDrivenSystem::IsGPUDrivenWorld(GetWorld());
+
+	//查看哪些HISM或者ISM不支持
+	if (CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && !bUseGpuDriven) {
+		UE_LOG(MobileGpuDriven, Warning, TEXT("%s does not support GpuDriven"), *GetStaticMesh()->GetName());
+	}
+
 	const bool HasValidData = PerInstanceSMData.Num() > 0;
 	if (bUseGpuDriven && HasValidData) {
 		SetGpuDrivenIsValid(true);
@@ -3577,7 +3589,7 @@ void UInstancedStaticMeshComponent::BuildGpuDrivenCluster() {
 	for (int32 i = 0; i < PerInstanceSMData.Num(); ++i) {
 		const FTransform InstanceToWorld = FTransform(PerInstanceSMData[i].Transform) * ComponentTransform;
 		const FBoxSphereBounds ClusterBound = RenderBounds.TransformBy(InstanceToWorld);
-		GpuDrivenCluster->Emplace(i, 1, ClusterBound.Origin, ClusterBound.BoxExtent);
+		GpuDrivenCluster->Emplace(i, 1, RenderBounds.SphereRadius, ClusterBound.Origin, ClusterBound.BoxExtent);
 	}
 }
 
@@ -3599,14 +3611,13 @@ void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementSha
 
 	const FGpuDrivenInstancingUserData* InstancingUserData = (const FGpuDrivenInstancingUserData*)BatchElement.UserData;
 	const auto* InstancedVertexFactory = static_cast<const FManualFetchInstancedStaticMeshVertexFactory*>(VertexFactory);
-	//const int32 InstanceOffsetValue = BatchElement.UserIndex;
+	const int32 IndirectDrawIndex = BatchElement.UserIndex; //使用UserIndex作为IndirectDrawIndex
 
 	ShaderBindings.Add(Shader->GetUniformBufferParameter<FInstancedStaticMeshVertexFactoryUniformShaderParameters>(), InstancedVertexFactory->GetUniformBuffer());
-
-	//#TODO: Remove don't need?
-	FIntPoint InstanceToRenderStartIndexAndIsShadowParameter = FIntPoint(InstancingUserData->InstanceToRenderStartIndex, InstancingUserData->bIsShadow);
-	ShaderBindings.Add(InstanceToRenderStartIndexAndIsShadow, InstanceToRenderStartIndexAndIsShadowParameter);	
+	FIntPoint InstanceToRenderStartIndexAndDrawIndexParameter = FIntPoint(InstancingUserData->InstanceToRenderStartIndex, IndirectDrawIndex);
+	ShaderBindings.Add(InstanceToRenderStartIndexAndDrawIndex, InstanceToRenderStartIndexAndDrawIndexParameter);
 	ShaderBindings.Add(InstanceToRenderIndexBufferSRV, InstancingUserData->InstanceToRenderIndexBufferSRV);
+	ShaderBindings.Add(FirstInstanceIndexBufferSRV, InstancingUserData->FirstInstanceIndexBufferSRV);
 
 	if (InstancingFadeOutParamsParameter.IsBound())
 	{

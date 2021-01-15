@@ -31,17 +31,19 @@ class FStaticMeshInstanceData;
 
 struct FGpuDrivenCluster{
 
-	FGpuDrivenCluster(uint32 InFirstRenderIndex, uint32 InClusterInstanceCount, const FVector& BoundCenter, const FVector& BoundExtent) 
+	FGpuDrivenCluster(uint32 InFirstRenderIndex, uint32 InClusterInstanceCount, const float InScaledBoundSphereRadius, const FVector& InBoundCenter, const FVector& InBoundExtent)
 		: FirstRenderIndex(InFirstRenderIndex)
 		, ClusterInstanceCount(InClusterInstanceCount)
-		, BoundCenter(BoundCenter)
-		, BoundExtent(BoundExtent)
+		, ScaledBoundSphereRadius(InScaledBoundSphereRadius)
+		, BoundCenter(InBoundCenter)
+		, BoundExtent(InBoundExtent)
 	{
 
 	}
 
 	uint32 FirstRenderIndex;
 	uint32 ClusterInstanceCount;
+	float ScaledBoundSphereRadius;
 	FVector BoundCenter;
 	FVector BoundExtent;
 };

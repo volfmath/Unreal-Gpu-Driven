@@ -1137,7 +1137,12 @@ public:
 		, CaptureTag(0)
 #endif
 	{
-		SetupOcclusion(InComponent);
+		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+		//GPU Driven use hzb
+		if (!bUseGpuDriven) {
+			SetupOcclusion(InComponent);
+		}
+		//@StarLight code - END GPU-Driven, Added by yanjianhong
 	}
 
 	void SetupOcclusion(UHierarchicalInstancedStaticMeshComponent* InComponent)
@@ -2134,10 +2139,14 @@ void FHierarchicalStaticMeshSceneProxy::BuildIndirectDrawBatch(const FSceneView*
 	auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadOrTask(UniqueObjectId);
 	check(CurrentSystem);
 	const FMeshEntity& MeshEntity = CurrentSystem->GetMeshEntityByUniqueId(UniqueObjectId);
+	uint32 StartIndirectDrawIndex = MeshEntity.IndirectDrawStartIndex;
+	uint32 CurDrawOffset = 0;
 
 	for (int32 LODIndex = FirstLOD; LODIndex < LastLODPlusOne; LODIndex++) {
 		const FStaticMeshLODResources& LODModel = RenderData->LODResources[LODIndex];
 		for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++) {
+
+			CurDrawOffset += 1;
 
 			//Only one MeshBatch, one MeshBatchElement
 			FMeshBatch& MeshElement = Collector.AllocateMesh();
@@ -2153,18 +2162,18 @@ void FHierarchicalStaticMeshSceneProxy::BuildIndirectDrawBatch(const FSceneView*
 
 				const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
 				FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
+
 				auto UserDataPtr = const_cast<FGpuDrivenInstancingUserData*>(&MeshEntity.GpuDriven_UserData);
-				UserDataPtr->bIsShadow = false;
 				BatchElement0.UserData = reinterpret_cast<void*>(UserDataPtr);
 				BatchElement0.bUserDataIsColorVertexBuffer = false;
 				BatchElement0.MaxScreenSize = 1.0;
 				BatchElement0.MinScreenSize = 0.0;
 				BatchElement0.InstancedLODIndex = LODIndex; //Not needed used to Dithered
-				BatchElement0.UserIndex = 0; //Not needed used to Dithered
+				BatchElement0.UserIndex = StartIndirectDrawIndex + CurDrawOffset - 1; //Not needed used to Dithered
 				BatchElement0.PrimitiveUniformBuffer = GetUniformBuffer();
 				BatchElement0.NumInstances = NumInstances;
 
-				SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement, MeshEntity, CurrentSystem);
+				SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement, StartIndirectDrawIndex, CurrentSystem);
 				Collector.AddMesh(0, MeshElement);
 			}
 		}
@@ -3777,8 +3786,8 @@ void UHierarchicalInstancedStaticMeshComponent::BuildGpuDrivenCluster() {
 		}
 	}
 	if (ClusterTreeRef.Num() > 0) {
+		const auto& StaticMeshRenderDta = GetStaticMesh()->RenderData;
 		FVector AverageScale = ClusterTreeRef[0].MinInstanceScale + (ClusterTreeRef[0].MaxInstanceScale - ClusterTreeRef[0].MinInstanceScale) / 2.f;
-		//check(AverageScale.Equals(FVector(1.f, 1.f, 1.f)));
 
 		GpuDrivenCluster = MakeShared<TArray<FGpuDrivenCluster>, ESPMode::ThreadSafe>();
 		GpuDrivenCluster->Empty(ClusterTreeRef.Num() - LeafNodeStartIndex);
@@ -3787,11 +3796,11 @@ void UHierarchicalInstancedStaticMeshComponent::BuildGpuDrivenCluster() {
 		uint32 FirstRenderIndex = 0;
 		for (int32 i = LeafNodeStartIndex; i < ClusterTreeRef.Num(); ++i) {
 			FBoxSphereBounds RenderBounds = FBoxSphereBounds(FBox(ClusterTreeRef[i].BoundMin, ClusterTreeRef[i].BoundMax));
-			//FBoxSphereBounds ScaledBounds = RenderData->Bounds.TransformBy(FTransform(FRotator::ZeroRotator, FVector::ZeroVector, AverageScale));
+			FBoxSphereBounds ScaledBounds = StaticMeshRenderDta->Bounds.TransformBy(FTransform(FRotator::ZeroRotator, FVector::ZeroVector, AverageScale));
 
 			const FBoxSphereBounds ClusterBound = RenderBounds.TransformBy(ComponentTransform);
 			uint32 ClusterInstanceCount = ClusterTreeRef[i].LastInstance - ClusterTreeRef[i].FirstInstance + 1;
-			GpuDrivenCluster->Emplace(FirstRenderIndex, ClusterInstanceCount, ClusterBound.Origin, ClusterBound.BoxExtent);
+			GpuDrivenCluster->Emplace(FirstRenderIndex, ClusterInstanceCount, ScaledBounds.SphereRadius, ClusterBound.Origin, ClusterBound.BoxExtent);
 			FirstRenderIndex += ClusterInstanceCount;
 		}
 	}
