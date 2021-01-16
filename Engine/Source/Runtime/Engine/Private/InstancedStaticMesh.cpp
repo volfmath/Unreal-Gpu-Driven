@@ -3561,7 +3561,15 @@ void UInstancedStaticMeshComponent::OnRegister() {
 		UE_LOG(MobileGpuDriven, Warning, TEXT("%s does not support GpuDriven"), *GetStaticMesh()->GetName());
 	}
 
-	const bool HasValidData = PerInstanceSMData.Num() > 0;
+	const bool HasValidData = PerInstanceSMData.Num() > 0 && GetStaticMesh() != nullptr;
+
+	if (!GetStaticMesh()) {
+		UE_LOG(MobileGpuDriven, Warning, TEXT("%s Component Mesh is Null!"), *GetName());
+		if (GetOwner()) {
+			UE_LOG(MobileGpuDriven, Warning, TEXT("%s Actor Mesh is Null!"), *GetOwner()->GetName());
+		}
+	}
+
 	if (bUseGpuDriven && HasValidData) {
 		SetGpuDrivenIsValid(true);
 		BuildGpuDrivenCluster();

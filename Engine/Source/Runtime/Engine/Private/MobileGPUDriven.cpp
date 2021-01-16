@@ -273,7 +273,9 @@ FMeshEntity FMeshEntity::CreateMeshEntity(UInstancedStaticMeshComponent* Instanc
 	for (uint32 Lod = 0; Lod < NumLod; ++Lod) {
 		const FStaticMeshLODResources& LODModel = StaticMeshRenderDta->LODResources[Lod];
 		uint32 NumSection = LODModel.Sections.Num();
-		if (InstanceComponent->LODData.Num() > 0) {
+		
+		//某些Mesh LODData数量不与Lod数量相同
+		if (InstanceComponent->LODData.Num() > 0 && static_cast<uint32>(InstanceComponent->LODData.Num()) > Lod) {
 			//Make sure there is no PreCulled
 			check(InstanceComponent->LODData[Lod].PreCulledSections.Num() == 0);
 		}

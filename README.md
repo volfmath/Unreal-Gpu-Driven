@@ -15,8 +15,6 @@ Test code for gpu driven in unreal
   - [x] Distance Culling
   - [x] HISM Lod Calculate，Support different Scalebound
 
-
-
 Optimazation：
 
 - [x] Delete the Occlusion Query for HISM
