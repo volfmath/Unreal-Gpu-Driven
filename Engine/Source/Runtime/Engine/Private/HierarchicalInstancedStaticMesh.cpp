@@ -1142,6 +1142,11 @@ public:
 		if (!bUseGpuDriven) {
 			SetupOcclusion(InComponent);
 		}
+		else {
+			//No occlusion cluster
+			FirstOcclusionNode = -1;
+			LastOcclusionNode = -1;
+		}
 		//@StarLight code - END GPU-Driven, Added by yanjianhong
 	}
 

@@ -47,7 +47,7 @@ public:
 
 	FMobileGpuCullingCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer) {
-		TotalClusterCount.Bind(Initializer.ParameterMap, TEXT("TotalClusterCount"));
+		TotalClusterCount.Bind(Initializer.ParameterMap, TEXT("TotalClusterCount_Pass_0"));
 		ViewOriginPosition.Bind(Initializer.ParameterMap, TEXT("ViewOriginPosition"));
 		ViewFrustumPermutedPlanes.Bind(Initializer.ParameterMap, TEXT("ViewFrustumPermutedPlanes"));
 		ProjMatrixXY.Bind(Initializer.ParameterMap, TEXT("ProjMatrixXY"));
@@ -115,6 +115,7 @@ public:
 
 	FMobileInstanceIndexBufferCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer) {
+		TotalClusterCount.Bind(Initializer.ParameterMap, TEXT("TotalClusterCount_Pass_1"));
 		OutputClusterBuffer_SRV.Bind(Initializer.ParameterMap, TEXT("OutputClusterBufferSRV"));
 		EntityLodCountBuffer_SRV.Bind(Initializer.ParameterMap, TEXT("LodCountBufferSRV_0"));
 		InstanceToRenderIndexBuffer_UAV.Bind(Initializer.ParameterMap, TEXT("InstanceToRenderIndexBufferUAV"));
@@ -125,6 +126,7 @@ public:
 	}
 
 	void BindParameters(FRHICommandList& RHICmdList, const FViewInfo& View, FMobileGPUDrivenSystem* GpuDrivenSystem) {
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), TotalClusterCount, GpuDrivenSystem->CurTotalClusterCount);
 		SetSRVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), OutputClusterBuffer_SRV, GpuDrivenSystem->ClusterOutputData_GPU.SRV);
 		SetSRVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), EntityLodCountBuffer_SRV, GpuDrivenSystem->EntityLodBufferCount_GPU.SRV);
 		SetUAVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), InstanceToRenderIndexBuffer_UAV, GpuDrivenSystem->InstanceToRenderIndexBuffer_GPU.UAV);
@@ -135,6 +137,7 @@ public:
 	}
 
 private:
+	LAYOUT_FIELD(FShaderParameter, TotalClusterCount);
 	LAYOUT_FIELD(FShaderResourceParameter, OutputClusterBuffer_SRV);
 	LAYOUT_FIELD(FShaderResourceParameter, EntityLodCountBuffer_SRV);
 	LAYOUT_FIELD(FShaderResourceParameter, InstanceToRenderIndexBuffer_UAV);
@@ -151,6 +154,7 @@ public:
 
 	FMobileUpdateDrawBufferCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer) {
+		TotalClusterCount.Bind(Initializer.ParameterMap, TEXT("TotalDrawCount_Pass_2"));
 		IndirectDrawToLodIndexBuffer_SRV.Bind(Initializer.ParameterMap, TEXT("IndirectDrawToLodIndexBufferSRV"));
 		EntityLodCountBuffer_SRV.Bind(Initializer.ParameterMap, TEXT("LodCountBufferSRV_1"));
 		IndirectDrawCommandBuffer_UAV.Bind(Initializer.ParameterMap, TEXT("IndirectDrawCommandBufferUAV"));
@@ -162,6 +166,7 @@ public:
 	}
 
 	void BindParameters(FRHICommandList& RHICmdList, const FViewInfo& View, FMobileGPUDrivenSystem* GpuDrivenSystem) {
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundComputeShader(), TotalClusterCount, GpuDrivenSystem->CurTotalIndirectDrawCount);
 		SetSRVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), IndirectDrawToLodIndexBuffer_SRV, GpuDrivenSystem->IndirectDrawToLodIndexBuffer_GPU.SRV);
 		SetSRVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), EntityLodCountBuffer_SRV, GpuDrivenSystem->EntityLodBufferCount_GPU.SRV);
 		SetUAVParameter(RHICmdList, RHICmdList.GetBoundComputeShader(), IndirectDrawCommandBuffer_UAV, GpuDrivenSystem->IndirectDrawCommandBuffer_GPU.UAV);
@@ -174,6 +179,7 @@ public:
 	}
 
 private:
+	LAYOUT_FIELD(FShaderParameter, TotalClusterCount);
 	LAYOUT_FIELD(FShaderResourceParameter, IndirectDrawToLodIndexBuffer_SRV);
 	LAYOUT_FIELD(FShaderResourceParameter, EntityLodCountBuffer_SRV);
 	LAYOUT_FIELD(FShaderResourceParameter, IndirectDrawCommandBuffer_UAV);

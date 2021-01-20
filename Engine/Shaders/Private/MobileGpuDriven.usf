@@ -18,7 +18,7 @@ struct ClusterInputData
     uint ClusterInstanceCountAndLodCount;
     uint InstanceBufferStartIndex;  
     
-    float CullDistance; //注意对齐16字节
+    float CullDistance; //Aligned to 16 bytes
     float3 BoundCenter;
     
     float ScaledBoundSphereRadius;
@@ -29,15 +29,14 @@ struct ClusterOutputData
 {
     uint FirstRenderIndex;
     uint LodBufferStartIndex;
-    uint ClusterInstanceCountAndLodIndex; //压缩到16字节
-    uint InstanceBufferStartIndexAddLodCount; //压缩到16字节
+    uint ClusterInstanceCountAndLodIndex; //Compressed to 16 bytes
+    uint InstanceBufferStartIndexAddLodCount; //Compressed to 16 bytes
 };
 
 //[input]
-uint TotalClusterCount;
+uint TotalClusterCount_Pass_0;
 float3 ViewOriginPosition;
 float4 ViewFrustumPermutedPlanes[8]; 
-float4 ViewNearClippingPlane;
 float2 ProjMatrixXY;
 float4x4 LastFrameViewProjectMatrix;
 
@@ -53,7 +52,7 @@ RWBuffer<uint> EntityLodCountBufferUAV;
 uint GetClusterLod(in float3 BoundMin, in float3 BoundMax, in uint MeshLodCount, in uint LodBufferStartIndex, in float ScaledBoundSphereRadius, in float CullDis)
 {
     float3 Center = (BoundMin + BoundMax) * 0.5f;
-    float BoundHalfExtent = distance(BoundMin, BoundMax) * 0.5f; //#TODO: Lod使用StaticMesh的Bound计算
+    float BoundHalfExtent = distance(BoundMin, BoundMax) * 0.5f;
     float ViewToCenterDis = distance(Center, ViewOriginPosition);
     float FarDistance = ViewToCenterDis - BoundHalfExtent;
     // Get projection multiple accounting for view scaling.
@@ -227,10 +226,9 @@ bool HzbTest(in float3 BoundMin, in float3 BoundMax)
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
 {
-    ClusterOutputData OutputRenderData = (ClusterOutputData)0;
-    if (DispatchThreadId < TotalClusterCount)
+    if (DispatchThreadId < TotalClusterCount_Pass_0)
     {
-        //每次直接读16个字节,FrustumCulling需要读取两次
+        ClusterOutputData OutputRenderData = (ClusterOutputData) 0;
         ClusterInputData RenderData = InputClusterBufferSRV[DispatchThreadId];
     
         //Distance Culling
@@ -262,7 +260,7 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         {
             bIsOcclusionVisible = true;
         }
-        
+       
         if (!bIsOcclusionVisible)
         {
             OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
@@ -282,11 +280,12 @@ void MobileGpuCulling(uint DispatchThreadId : SV_DispatchThreadID)
         OutputRenderData.LodBufferStartIndex = RenderData.LodBufferStartIndex;
         OutputRenderData.ClusterInstanceCountAndLodIndex = ClusterInstanceCount | (CurLodIndex << 16);
         OutputRenderData.InstanceBufferStartIndexAddLodCount = RenderData.InstanceBufferStartIndex + CurLodCount;
+        OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
     }
-    OutputClusterBufferUAV[DispatchThreadId] = OutputRenderData;
 }
 
 //[Input]
+uint TotalClusterCount_Pass_1;
 StructuredBuffer<ClusterOutputData> OutputClusterBufferSRV;
 Buffer<uint> LodCountBufferSRV_0;
 
@@ -296,32 +295,36 @@ RWStructuredBuffer<uint> InstanceToRenderIndexBufferUAV;
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileUpdateInstanceIndexBuffer(uint DispatchThreadId : SV_DispatchThreadID)
 {
-    ClusterOutputData RenderData = OutputClusterBufferSRV[DispatchThreadId];
-    uint ClusterInstanceCount = (RenderData.ClusterInstanceCountAndLodIndex & 0xFFFF);
-    if (ClusterInstanceCount == 0)
+    if (DispatchThreadId < TotalClusterCount_Pass_1)
     {
-        return;
-    }
+        ClusterOutputData RenderData = OutputClusterBufferSRV[DispatchThreadId];
+        uint ClusterInstanceCount = (RenderData.ClusterInstanceCountAndLodIndex & 0xFFFF);
+        if (ClusterInstanceCount == 0)
+        {
+            return;
+        }
     
-    uint PreLodCount = 0;
-    uint CurLodIndex = (RenderData.ClusterInstanceCountAndLodIndex >> 16);
-    uint CurLodBufferIndex = RenderData.LodBufferStartIndex + CurLodIndex;
+        uint PreLodCount = 0;
+        uint CurLodIndex = (RenderData.ClusterInstanceCountAndLodIndex >> 16);
+        uint CurLodBufferIndex = RenderData.LodBufferStartIndex + CurLodIndex;
     
-    LOOP
-    for (uint StartLodIndex = RenderData.LodBufferStartIndex; StartLodIndex < CurLodBufferIndex; ++StartLodIndex)
-    {
-        PreLodCount += LodCountBufferSRV_0[StartLodIndex];
-    }
+        LOOP
+        for (uint StartLodIndex = RenderData.LodBufferStartIndex; StartLodIndex < CurLodBufferIndex; ++StartLodIndex)
+        {
+            PreLodCount += LodCountBufferSRV_0[StartLodIndex];
+        }
     
-    uint CurInstanceBufferStartIndex = RenderData.InstanceBufferStartIndexAddLodCount + PreLodCount;
-    LOOP
-    for (uint RenderIndex = 0; RenderIndex < ClusterInstanceCount; ++RenderIndex)
-    {
-        InstanceToRenderIndexBufferUAV[CurInstanceBufferStartIndex + RenderIndex] = RenderData.FirstRenderIndex + RenderIndex;
-    }     
+        uint CurInstanceBufferStartIndex = RenderData.InstanceBufferStartIndexAddLodCount + PreLodCount;
+        LOOP
+        for (uint RenderIndex = 0; RenderIndex < ClusterInstanceCount; ++RenderIndex)
+        {
+            InstanceToRenderIndexBufferUAV[CurInstanceBufferStartIndex + RenderIndex] = RenderData.FirstRenderIndex + RenderIndex;
+        }
+    }   
 }
 
 //[Input]
+uint TotalDrawCount_Pass_2;
 Buffer<uint2> IndirectDrawToLodIndexBufferSRV;
 Buffer<uint> LodCountBufferSRV_1;
 
@@ -332,18 +335,22 @@ RWBuffer<uint> FirstInstanceIndexBufferUAV;
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileIndirectDrawUpdate(uint DispatchThreadId : SV_DispatchThreadID)
 {
-    uint IndirectDrawInstanceCountIndex = DispatchThreadId * 5 + 1; //InstanceCount
-    uint2 LodBufferIndexAndLodIndex = IndirectDrawToLodIndexBufferSRV[DispatchThreadId];
-    
-    uint FirstInstanceIndex = 0;
-    LOOP
-    for (uint i = 1; i <= LodBufferIndexAndLodIndex.y; ++i)
+    if (DispatchThreadId < TotalDrawCount_Pass_2)
     {
-        FirstInstanceIndex += LodCountBufferSRV_1[LodBufferIndexAndLodIndex.x - i];
-    }
+        uint IndirectDrawInstanceCountIndex = DispatchThreadId * 5 + 1; //InstanceCount
+        uint2 LodBufferIndexAndLodIndex = IndirectDrawToLodIndexBufferSRV[DispatchThreadId];
     
-    IndirectDrawCommandBufferUAV[IndirectDrawInstanceCountIndex] = LodCountBufferSRV_1[LodBufferIndexAndLodIndex.x];
-    FirstInstanceIndexBufferUAV[DispatchThreadId] = FirstInstanceIndex;
+        uint FirstInstanceIndex = 0;
+        LOOP
+
+        for (uint i = 1; i <= LodBufferIndexAndLodIndex.y; ++i)
+        {
+            FirstInstanceIndex += LodCountBufferSRV_1[LodBufferIndexAndLodIndex.x - i];
+        }
+    
+        IndirectDrawCommandBufferUAV[IndirectDrawInstanceCountIndex] = LodCountBufferSRV_1[LodBufferIndexAndLodIndex.x];
+        FirstInstanceIndexBufferUAV[DispatchThreadId] = FirstInstanceIndex;
+    }
 }
 
 
