@@ -188,6 +188,11 @@ class ENGINE_API UInstancedStaticMeshComponent : public UStaticMeshComponent
 
 	//@StarLight code - END   using Clustering Algorithm Based on Density to build tree, Added by zhuyule
 
+	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	UPROPERTY(EditAnywhere, Category = MobileGpuDriven)
+	bool bUseGpuDrivenForInstance;
+	//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 	/** Mapping from PerInstanceSMData order to instance render buffer order. If empty, the PerInstanceSMData order is used. */
 	UPROPERTY()
 	TArray<int32> InstanceReorderTable;

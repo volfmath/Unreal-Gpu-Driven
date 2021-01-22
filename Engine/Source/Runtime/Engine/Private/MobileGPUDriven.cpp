@@ -4,7 +4,7 @@
 
 ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
 	TEXT("r.Mobile.GpuDriven"),
-	0,
+	1,
 	TEXT("Whether to allow gpudriven.\n"),
 	ECVF_Scalability
 );
@@ -427,7 +427,7 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 				DrawCommandBuffer.InstanceCount = NumRenderCluster;
 				DrawCommandBuffer.FirstIndex = ProxyEntity.SectionFirstIndex[LocalIndirectDrawIndex];
 				DrawCommandBuffer.VertexOffset = 0;
-				DrawCommandBuffer.FirstInstance = 1; //GPU Write
+				DrawCommandBuffer.FirstInstance = 0; //DX11 and Mac cannot use offset directly, but it takes effect on IOS
 				LocalIndirectDrawIndex += 1;
 
 				auto& IndirectDrawToLodIndex = IndirectDrawToLodIndexBuffer_CPU[DrawElementIndex];

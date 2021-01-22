@@ -1576,6 +1576,8 @@ UInstancedStaticMeshComponent::UInstancedStaticMeshComponent(const FObjectInitia
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	bGpuDrivenIsValid = false;
+
+	bUseGpuDrivenForInstance = false;
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
@@ -3554,21 +3556,28 @@ void UInstancedStaticMeshComponent::OnRegister() {
 	//Because Transform information is updated in OnRegister
 	bool bIsValidObject = !HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject);
 	ERHIFeatureLevel::Type FeatureLevel = GetWorld()->FeatureLevel.GetValue();
-	const bool bUseGpuDriven = bIsValidObject && (FeatureLevel == ERHIFeatureLevel::Type::ES3_1) && FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this) && FMobileGPUDrivenSystem::IsGPUDrivenWorld(GetWorld());
 
-	//查看哪些HISM或者ISM不支持
-	if (CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && !bUseGpuDriven) {
-		UE_LOG(MobileGpuDriven, Warning, TEXT("%s does not support GpuDriven"), *GetStaticMesh()->GetName());
-	}
+	const bool bUseGpuDriven = bUseGpuDrivenForInstance && bIsValidObject 
+		&& (FeatureLevel == ERHIFeatureLevel::Type::ES3_1)
+		&& FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this)
+		&& FMobileGPUDrivenSystem::IsGPUDrivenWorld(GetWorld())
+		&& GetStaticMesh() != nullptr;
 
-	const bool HasValidData = PerInstanceSMData.Num() > 0 && GetStaticMesh() != nullptr;
 
-	if (!GetStaticMesh()) {
-		UE_LOG(MobileGpuDriven, Warning, TEXT("%s Component Mesh is Null!"), *GetName());
-		if (GetOwner()) {
-			UE_LOG(MobileGpuDriven, Warning, TEXT("%s Actor Mesh is Null!"), *GetOwner()->GetName());
+	//Check Support
+	if (CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && bUseGpuDrivenForInstance && !bUseGpuDriven) {
+		if (GetStaticMesh()) {
+			UE_LOG(MobileGpuDriven, Warning, TEXT("%s does not support GpuDriven"), *GetStaticMesh()->GetName());
 		}
+		else {
+			UE_LOG(MobileGpuDriven, Warning, TEXT("%s Component Mesh is Null!"), *GetName());
+			if (GetOwner()) {
+				UE_LOG(MobileGpuDriven, Warning, TEXT("%s Actor Mesh is Null!"), *GetOwner()->GetName());
+			}
+		}	
 	}
+
+	const bool HasValidData = PerInstanceSMData.Num() > 0;
 
 	if (bUseGpuDriven && HasValidData) {
 		SetGpuDrivenIsValid(true);
