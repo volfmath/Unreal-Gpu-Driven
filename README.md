@@ -18,4 +18,5 @@ Test code for gpu driven in unreal
 Optimazation：
 
 - [x] Delete the Occlusion Query for HISM
-- [ ] Support manual label check
+- [x] Support manual label check
+- [ ] Export scene information tool
