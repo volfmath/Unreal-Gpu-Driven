@@ -1107,6 +1107,52 @@ void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<const F
 	//@StarLight code - END GPU-Driven, Added by yanjianhong
 }
 
+//@StarLight code - BEGIN Add rain depth pass, edit by wanghai
+//void FInstancedStaticMeshSceneProxy::GetDynamicMeshElements_RainDepthPass(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, class FMeshElementCollector& Collector) const
+//{
+//	// Use lowest lod level 
+//	const int32 LODIndex = 0;
+//	const FStaticMeshLODResources& LODModel = StaticMesh->RenderData->LODResources[LODIndex];
+//
+//	for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++)
+//	{
+//		const int32 NumBatches = GetNumMeshBatches();
+//
+//		for (int32 BatchIndex = 0; BatchIndex < NumBatches; BatchIndex++)
+//		{
+//			FMeshBatch& MeshElement = Collector.AllocateMesh();
+//			
+//			if(GetMeshElement(LODIndex, BatchIndex, SectionIndex, 0, false, true, MeshElement))
+//			{
+//				
+//				if (auto MaterialProxy = MeshElement.MaterialRenderProxy)
+//				{
+//					const FMaterialRenderProxy* OutFallbackMaterialRenderProxy = nullptr;
+//					const FMaterial& Material = MeshElement.MaterialRenderProxy->GetMaterialWithFallback(Collector.GetFeatureLevel(), OutFallbackMaterialRenderProxy);
+//					if(!Material.IsUsedWithRainOccluder())
+//						break;
+//				}
+//				MeshElement.VertexFactory = &InstancedRenderData.VertexFactories[LODIndex];
+//				MeshElement.bCanApplyViewModeOverrides = true;
+//				const uint32 NumInstances = InstancedRenderData.PerInstanceRenderData->InstanceBuffer.GetNumInstances();
+//				FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
+//				BatchElement0.UserData = (void*)&UserData_AllInstances;
+//				BatchElement0.MaxScreenSize = 1.f;
+//				BatchElement0.MinScreenSize = 0.f;
+//				BatchElement0.bUserDataIsColorVertexBuffer = false;
+//				BatchElement0.InstancedLODIndex = LODIndex;
+//				BatchElement0.UserIndex = 0;
+//				BatchElement0.PrimitiveUniformBuffer = GetUniformBuffer();
+//
+//				BatchElement0.NumInstances = NumInstances;
+//
+//				Collector.AddMesh(0, MeshElement);
+//			}
+//		}
+//	}
+//}
+//@StarLight code - END Add rain depth pass, edit by wanghai
+
 int32 FInstancedStaticMeshSceneProxy::CollectOccluderElements(FOccluderElementsCollector& Collector) const
 {
 	if (OccluderData)
@@ -3550,14 +3596,13 @@ void FInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings
 
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-void UInstancedStaticMeshComponent::OnRegister() {
-	Super::OnRegister();
 
-	//Because Transform information is updated in OnRegister
+void UInstancedStaticMeshComponent::RegisterCompToGpuDrivenSystem() {
+	
 	bool bIsValidObject = !HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject);
 	ERHIFeatureLevel::Type FeatureLevel = GetWorld()->FeatureLevel.GetValue();
 
-	const bool bUseGpuDriven = bUseGpuDrivenForInstance && bIsValidObject 
+	const bool bUseGpuDriven = bUseGpuDrivenForInstance && bIsValidObject
 		&& (FeatureLevel == ERHIFeatureLevel::Type::ES3_1)
 		&& FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(this)
 		&& FMobileGPUDrivenSystem::IsGPUDrivenWorld(GetWorld())
@@ -3574,7 +3619,7 @@ void UInstancedStaticMeshComponent::OnRegister() {
 			if (GetOwner()) {
 				UE_LOG(MobileGpuDriven, Warning, TEXT("%s Actor Mesh is Null!"), *GetOwner()->GetName());
 			}
-		}	
+		}
 	}
 
 	const bool HasValidData = PerInstanceSMData.Num() > 0;
@@ -3586,8 +3631,7 @@ void UInstancedStaticMeshComponent::OnRegister() {
 	}
 }
 
-void UInstancedStaticMeshComponent::OnUnregister() {
-
+void UInstancedStaticMeshComponent::UnRegisterCompToGpuDrivenSystem() {
 	uint32 UniqueObjectId = GetUniqueID();
 	auto CurrentSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_GameThread(UniqueObjectId);
 	if (CurrentSystem) {
@@ -3595,6 +3639,19 @@ void UInstancedStaticMeshComponent::OnUnregister() {
 		uint32 UniqueWorldId = GetWorld()->GetUniqueID();
 		FMobileGPUDrivenSystem::UnRegisterEntity(UniqueObjectId, UniqueWorldId);
 	}
+}
+
+void UInstancedStaticMeshComponent::OnRegister() {
+	Super::OnRegister();
+
+	//Because Transform information is updated in OnRegister
+	RegisterCompToGpuDrivenSystem();
+}
+
+void UInstancedStaticMeshComponent::OnUnregister() {
+
+	UnRegisterCompToGpuDrivenSystem();
+
 	Super::OnUnregister();
 }
 

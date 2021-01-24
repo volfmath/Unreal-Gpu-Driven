@@ -313,6 +313,8 @@ public:
 	TSharedPtr<FPerInstanceRenderData, ESPMode::ThreadSafe> PerInstanceRenderData;
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+	void RegisterCompToGpuDrivenSystem();
+	void UnRegisterCompToGpuDrivenSystem();
 	inline void SetGpuDrivenIsValid(bool ValidState) { bGpuDrivenIsValid = ValidState; }
 	inline bool GetGpuDrivenIsValid() { return bGpuDrivenIsValid; }
 	bool bGpuDrivenIsValid;

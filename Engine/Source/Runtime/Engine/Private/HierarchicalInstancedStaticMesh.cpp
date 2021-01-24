@@ -126,16 +126,11 @@ static TAutoConsoleVariable<int32> CVarFoliageUseInstanceRuns(
 	TEXT("Whether to use the InstanceRuns feature of FMeshBatch to compress foliage draw call data sent to the renderer.  Not supported by the Mesh Draw Command pipeline."));
 
 // @StarLight code - BEGIN HISM Occlusion Culling
-static TAutoConsoleVariable<int32> CVarMaxInstancesPerOcclusionQuery(
-	TEXT("foliage.MaxInstancesPerOcclusionQuery"),
-	4096,
-	TEXT("Controls the granualrity of Soft occlusion culling."));
+static TAutoConsoleVariable<int32> CVarGpuDrivenMaxLeafInstance(
+	TEXT("foliage.GpuDrivenLeafInstance"),
+	16,
+	TEXT("Control the maximum number of instances of each leaf node"));
 
-
-static TAutoConsoleVariable<int32> CVarUseSoftOcclusion(
-	TEXT("foliage.SoftOcclusionEnable"),
-	1,
-	TEXT("If greater than zero, use the SoftOcclusion"));
 // @StarLight code - END TextureArray Support
 
 //@StarLight code - BEGIN using  Clustering Algorithm Based on Density to build tree, Added by zhuyule
@@ -1712,7 +1707,12 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 	SCOPE_CYCLE_COUNTER(STAT_HISMCGetDynamicMeshElement);
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	if (bUseGpuDriven && !bHasSelectedInstances) {
+	if (bUseGpuDriven && !bHasSelectedInstances
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+		&& CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0
+#endif
+		) 
+	{
 		check(Views.Num() == 1);
 		const FSceneView* View = Views[0];
 
@@ -2837,7 +2837,10 @@ int32 UHierarchicalInstancedStaticMeshComponent::DesiredInstancesPerLeaf()
 	int32 VertsToSplit = CVarMinVertsToSplitNode.GetValueOnAnyThread();
 	if (LOD0Verts)
 	{
-		return FMath::Clamp(VertsToSplit / LOD0Verts, 1, 1024);
+		//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+		//No limit on the number of clusters when dynamic shadows are needed
+		return FMath::Clamp(VertsToSplit / LOD0Verts, 1, CVarGpuDrivenMaxLeafInstance.GetValueOnAnyThread());
+		//@StarLight code - END GPU-Driven, Added by yanjianhong
 	}
 	return 16;
 }
@@ -3810,6 +3813,38 @@ void UHierarchicalInstancedStaticMeshComponent::BuildGpuDrivenCluster() {
 		}
 	}
 }
+
+static void RebuildFoliageForGpuDriven(const TArray<FString>& Args) {
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	UE_LOG(LogConsoleResponse, Display, TEXT("Rebuild Foliage Trees for GpuDriven"));
+#endif
+
+	bool RebuildCluster = false;
+
+	if (Args.Num() > 0 && Args[0] == TEXT("1")) {
+		RebuildCluster = true;
+	}
+
+	for (TObjectIterator<UHierarchicalInstancedStaticMeshComponent> It; It; ++It){
+		UHierarchicalInstancedStaticMeshComponent* Comp = *It;
+		if (Comp && !Comp->IsTemplate() && !Comp->IsPendingKill()){			
+			if (RebuildCluster) {
+				Comp->BuildTreeIfOutdated(false, true);
+				Comp->UnRegisterCompToGpuDrivenSystem();
+				Comp->RegisterCompToGpuDrivenSystem();
+			}
+			Comp->MarkRenderStateDirty();
+		}
+	}
+}
+
+static FAutoConsoleCommand RebuildFoliageTreesGpuDrivenCmd(
+	TEXT("GFoliage.RebuildGpuDriven"),
+	TEXT("Recreate gpudriven data for non-grass foliage."),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&RebuildFoliageForGpuDriven)
+);
+
+
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 static void RebuildFoliageTrees(const TArray<FString>& Args)

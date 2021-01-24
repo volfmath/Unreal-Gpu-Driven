@@ -1,4 +1,9 @@
+
+
+
+
 # Unreal-Gpu-Driven
+
 Test code for gpu driven in unreal
 
 - [x] Support ISM
@@ -19,4 +24,19 @@ Optimazation：
 
 - [x] Delete the Occlusion Query for HISM
 - [x] Support manual label check
-- [ ] Export scene information tool
+- [x] Dynamic enable and disable
+- [x] Dynamic Cluster Split
+- [ ] Display culling parameters
+
+Test:
+
+- [ ] IOS
+- [ ] Android
+
+Metal：
+
+- [ ] Use FirstInstance parameters instead of creating Buffer
+
+Opengl es:
+
+- [ ] Support StructureBuffer

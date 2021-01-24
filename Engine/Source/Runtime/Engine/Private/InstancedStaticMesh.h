@@ -35,6 +35,7 @@ class ULightComponent;
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 struct FMeshEntity;
 struct FMobileGPUDrivenSystem;
+extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven;
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 extern TAutoConsoleVariable<float> CVarFoliageMinimumScreenSize;
@@ -642,7 +643,13 @@ public:
 	FInstancedStaticMeshSceneProxy(UInstancedStaticMeshComponent* InComponent, ERHIFeatureLevel::Type InFeatureLevel)
 	:	FStaticMeshSceneProxy(InComponent, true)
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	,	bUseGpuDriven(InComponent->GetGpuDrivenIsValid())
+		, bUseGpuDriven
+		(
+			InComponent->GetGpuDrivenIsValid()	
+		#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+			&& CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 //dynamic switch
+		#endif
+		)
 	,	UniqueObjectId(0xFFFFFFFF)
 	,	StaticMesh(InComponent->GetStaticMesh())
 	,	InstancedRenderData(InComponent, bUseGpuDriven, InFeatureLevel)
@@ -721,6 +728,10 @@ public:
 
 	virtual void GetLightRelevance(const FLightSceneProxy* LightSceneProxy, bool& bDynamic, bool& bRelevant, bool& bLightMapped, bool& bShadowMapped) const override;
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const override;
+
+	//@StarLight code - BEGIN Add rain depth pass, edit by wanghai
+	//virtual void GetDynamicMeshElements_RainDepthPass(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, class FMeshElementCollector& Collector) const override;
+	//@StarLight code - END Add rain depth pass, edit by wanghai
 
 	virtual int32 GetNumMeshBatches() const override
 	{

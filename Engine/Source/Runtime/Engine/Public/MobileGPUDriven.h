@@ -141,15 +141,16 @@ struct FMobileGPUDrivenSystem {
 	static FMobileGPUDrivenSystem* GetGPUDrivenSystem_RenderThreadOrTask(uint32 UniqueObjectIndex);
 
 	//[Inner Call Function]
-	void UpdateAllGPUBuffer();
+	ENGINE_API void UpdateAllGPUBuffer();
+	void MarkDirty();
 
 	//[GameThread Only]
-	//TMap<uint32, uint32> UniqueIdToEntityIndex_GameThread;
 	uint32 WorldEntityCount_GameThread;
 	static TMap<uint32, FMobileGPUDrivenSystem*> WorldIndexToSystemMap_GameThread;
 	static TMap<uint32, FMobileGPUDrivenSystem*> GlobalUniqueIdToSystemMap_GameThread;
 
 	//[RenderThread Only]
+	bool bSystemDirty;
 	uint32 CurTotalClusterCount;
 	uint32 CurTotalLodCount;
 	uint32 CurTotalIndirectDrawCount;

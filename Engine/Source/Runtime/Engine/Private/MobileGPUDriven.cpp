@@ -31,8 +31,6 @@ void FMobileGPUDrivenSystem::RegisterEntity(UInstancedStaticMeshComponent* Insta
 	check(!GlobalUniqueIdToSystemMap_GameThread.Contains(UniqueObjectIndex));//注册时不能存在
 	GlobalUniqueIdToSystemMap_GameThread.Emplace(UniqueObjectIndex, FoundSystem);
 	FoundSystem->WorldEntityCount_GameThread += 1;
-	/*uint32 EntityIndex = FoundSystem->EntitiesComponents.Emplace(UniqueObjectIndex, InstanceComponent);
-	FoundSystem->UniqueIdToEntityIndex_GameThread.Emplace(UniqueObjectIndex, EntityIndex);*/
 
 	FMeshEntity SubmitToRenderThreadMeshEntity = FMeshEntity::CreateMeshEntity(InstanceComponent);
 	ENQUEUE_RENDER_COMMAND(FRegisterEntityToGpuDriven)(
@@ -41,9 +39,6 @@ void FMobileGPUDrivenSystem::RegisterEntity(UInstancedStaticMeshComponent* Insta
 			FMobileGPUDrivenSystem::RegisterEntity_RenderThread(MoveTemp(const_cast<FMeshEntity&>(RightValueMeshEntity)), FoundSystem);
 		}
 	);
-
-	//MarkDirty
-	//FoundSystem->MarkAllComponentsDirty();
 }
 
 //Return the index of the removed element
@@ -53,16 +48,7 @@ void FMobileGPUDrivenSystem::UnRegisterEntity(uint32 UniqueObjectIndex, uint32 U
 	check(IsInGameThread());
 	auto FoundSystem = GlobalUniqueIdToSystemMap_GameThread.FindChecked(UniqueObjectIndex);
 	FoundSystem->WorldEntityCount_GameThread -= 1;
-	//uint32 EntityIndex_GameThread = FoundSystem->UniqueIdToEntityIndex_GameThread.FindChecked(UniqueObjectIndex);
 
-	////Set the last element index
-	//auto& ToSwapComponent = FoundSystem->EntitiesComponents.Last();
-	//uint32& ToSwapEntityIndex_GameThread = FoundSystem->UniqueIdToEntityIndex_GameThread.FindChecked(ToSwapComponent.UniqueObjectId);
-	//ToSwapEntityIndex_GameThread = EntityIndex_GameThread;
-
-	////Remove element
-	//FoundSystem->EntitiesComponents.RemoveAtSwap(EntityIndex_GameThread);
-	//FoundSystem->UniqueIdToEntityIndex_GameThread.Remove(UniqueObjectIndex);
 	GlobalUniqueIdToSystemMap_GameThread.Remove(UniqueObjectIndex);
 	
 	if (FoundSystem->WorldEntityCount_GameThread == 0) {
@@ -75,9 +61,6 @@ void FMobileGPUDrivenSystem::UnRegisterEntity(uint32 UniqueObjectIndex, uint32 U
 			FMobileGPUDrivenSystem::UnRegisterEntity_RenderThread(UniqueObjectIndex);
 		}
 	);
-
-	//MarkDirty
-	//FoundSystem->MarkAllComponentsDirty();
 }
 
 void FMobileGPUDrivenSystem::RegisterEntity_RenderThread(FMeshEntity&& MeshEntity, FMobileGPUDrivenSystem* SceneSystemPtr)
@@ -90,10 +73,9 @@ void FMobileGPUDrivenSystem::RegisterEntity_RenderThread(FMeshEntity&& MeshEntit
 	uint32 EntityIndex_RenderThread = SceneSystemPtr->Entities.Emplace(MoveTemp(MeshEntity));
 	SceneSystemPtr->UniqueIdToEntityIndex_RenderThread.Emplace(MeshEntity.UniqueObjectId, EntityIndex_RenderThread);
 
+	SceneSystemPtr->MarkDirty();
 
-	//注册就更新, 因为AddStaticMesh是多线程的, 或者多线程锁?
-	SceneSystemPtr->UpdateAllGPUBuffer();
-
+	//SceneSystemPtr->UpdateAllGPUBuffer();
 }
 
 void FMobileGPUDrivenSystem::UnRegisterEntity_RenderThread(uint32 UniqueObjectIndex) {
@@ -113,7 +95,7 @@ void FMobileGPUDrivenSystem::UnRegisterEntity_RenderThread(uint32 UniqueObjectIn
 	FoundSystem->UniqueIdToEntityIndex_RenderThread.Remove(UniqueObjectIndex);
 	GlobalUniqueIdToSystemMap_RenderThread.Remove(UniqueObjectIndex);
 
-	FoundSystem->UpdateAllGPUBuffer();
+	FoundSystem->MarkDirty();
 
 	if (FoundSystem->Entities.Num() == 0) {
 		WorldIndexToSystemMap_RenderThread.Remove(UniqueWorldId);
@@ -325,15 +307,33 @@ FMeshEntityGameThread::FMeshEntityGameThread(uint32 InUniqueObjectId, UInstanced
 
 FMobileGPUDrivenSystem::FMobileGPUDrivenSystem() 
 	: WorldEntityCount_GameThread(0)
+	, bSystemDirty(false)
 {
 
 }
 
 FMobileGPUDrivenSystem::~FMobileGPUDrivenSystem() {
+	EntityLodScreenBuffer_GPU.Release();
+	IndirectDrawToLodIndexBuffer_GPU.Release();
+	ClusterInputData_GPU.Release();
+	IndirectDrawCommandBuffer_GPU.Release();
+	EntityLodBufferCount_GPU.Release();
+	IndirectDrawFirstInstanceIndex_GPU.Release();
+	ClusterOutputData_GPU.Release();
+	InstanceToRenderIndexBuffer_GPU.Release();
+}
 
+
+void FMobileGPUDrivenSystem::MarkDirty() {
+	bSystemDirty = true;
 }
 
 void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
+
+	if (!bSystemDirty)
+		return;
+
+	bSystemDirty = false;
 
 	//Resources Release
 	{
