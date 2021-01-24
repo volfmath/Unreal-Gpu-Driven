@@ -198,6 +198,8 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 	FMobileGPUDrivenSystem* GpuDrivenSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadByWorldId(Scene->GetWorld()->GetUniqueID());
 	if (GpuDrivenSystem) {
 
+		GpuDrivenSystem->UpdateAllGPUBuffer();
+
 		//Clear Pass
 		{
 			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
