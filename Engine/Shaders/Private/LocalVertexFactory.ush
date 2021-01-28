@@ -40,7 +40,9 @@ float4 InstancingFadeOutParams;
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	#if MOBILE_INSTANCE_MANUALFETCH
 		uint2 InstanceToRenderStartIndexAndDrawIndex;
-		StructuredBuffer<uint> InstanceToRenderIndexBufferSRV;
+		////#TODO:Temporarily replaced with TexBuffer, in order to pass vulkan
+		//StructuredBuffer<uint> InstanceToRenderIndexBufferSRV;
+		Buffer<uint> InstanceToRenderIndexBufferSRV;
 		Buffer<uint> FirstInstanceIndexBufferSRV;
 		uint GetRenderIndex(uint InstanceId)
 		{
@@ -703,8 +705,13 @@ float4 CalcWorldPosition(float4 Position, float4x4 InstanceTransform, uint Primi
 float4 CalcWorldPosition(float4 Position, uint PrimitiveId)
 #endif	// USE_INSTANCING
 {
+//@StarLight code - BEGIN Add rain depth pass, edit by wanghai
 #if USE_INSTANCING
-	return TransformLocalToTranslatedWorld(mul(Position, InstanceTransform).xyz, PrimitiveId);
+	#if RENDER_RAIN_DEPTH
+		return float4(TransformLocalToWorld(mul(Position, InstanceTransform).xyz, PrimitiveId), 1.f);
+	#else
+		return TransformLocalToTranslatedWorld(mul(Position, InstanceTransform).xyz, PrimitiveId);
+	#endif
 #elif USE_SPLINEDEFORM
 /*
 	// Make transform for this point along spline
@@ -715,9 +722,18 @@ float4 CalcWorldPosition(float4 Position, uint PrimitiveId)
 	// Transform from mesh to world space
 	return TransformLocalToTranslatedWorld(LocalPos.xyz);
 	*/
-	return INVARIANT(TransformLocalToTranslatedWorld(float3(mul(Position, CalcSliceTransform(dot(Position.xyz, SplineMeshDir))).xyz), PrimitiveId));
+	#if RENDER_RAIN_DEPTH
+		return float4(TransformLocalToWorld(mul(Position, CalcSliceTransform(dot(Position.xyz, SplineMeshDir))).xyz, PrimitiveId), 1.f);
+	#else
+		return INVARIANT(TransformLocalToTranslatedWorld(float3(mul(Position, CalcSliceTransform(dot(Position.xyz, SplineMeshDir))).xyz), PrimitiveId));
+	#endif
 #else
-	return TransformLocalToTranslatedWorld(Position.xyz, PrimitiveId);
+	#if RENDER_RAIN_DEPTH
+		return float4(TransformLocalToWorld(Position.xyz, PrimitiveId), 1.f);
+	#else
+		return TransformLocalToTranslatedWorld(Position.xyz, PrimitiveId);
+	#endif
+//@StarLight code - END Add rain depth pass, edit by wanghai
 #endif
 }
 

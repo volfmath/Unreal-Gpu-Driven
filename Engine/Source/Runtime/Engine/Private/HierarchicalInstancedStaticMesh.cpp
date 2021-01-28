@@ -125,13 +125,12 @@ static TAutoConsoleVariable<int32> CVarFoliageUseInstanceRuns(
 	0,
 	TEXT("Whether to use the InstanceRuns feature of FMeshBatch to compress foliage draw call data sent to the renderer.  Not supported by the Mesh Draw Command pipeline."));
 
-// @StarLight code - BEGIN HISM Occlusion Culling
+// @StarLight code - BEGIN GpuDriven Added by yanjianhong
 static TAutoConsoleVariable<int32> CVarGpuDrivenMaxLeafInstance(
 	TEXT("foliage.GpuDrivenLeafInstance"),
-	16,
+	8,
 	TEXT("Control the maximum number of instances of each leaf node"));
-
-// @StarLight code - END TextureArray Support
+// @StarLight code - END GpuDriven Added by yanjianhong
 
 //@StarLight code - BEGIN using  Clustering Algorithm Based on Density to build tree, Added by zhuyule
 static TAutoConsoleVariable<int32> CVarMaxInterval(
@@ -1718,7 +1717,14 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 
 		if (ClusterTree.Num() && View->GetDynamicMeshElementsShadowCullFrustum() == nullptr) {
 			BuildIndirectDrawBatch(View, ViewFamily, Collector);
-			return;
+
+//#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+//			if (CVarGpuDrivenRenderState.GetValueOnAnyThread() == 0)
+//#endif
+			{
+				return;
+			}
+			
 		}
 	}
 	//@StarLight code - END GPU-Driven, Added by yanjianhong

@@ -7,6 +7,8 @@ class UStaticMesh;
 
 
 extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven;
+extern ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenRenderState;
+extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileCS;
 DECLARE_LOG_CATEGORY_EXTERN(MobileGpuDriven, Warning, All);
 
 /**----------------------Gpu Struct Layout----------------------*/
@@ -25,11 +27,11 @@ struct FClusterInputData_CPU {
 	uint32 ClusterInstanceCountAndLodCount;
 	uint32 InstanceBufferStartIndex;
 
-	float CullDistance; //×¢Òâ¶ÔÆë16×Ö½Ú
-	FVector BoundCenter;
+	FVector BoundCenter; //Because the Vec3 start address of gles must be aligned to 16 bytes
+	float CullDistance; //Aligned to 16 bytes
 
-	float ScaledBoundSphereRadius;
 	FVector BoundExtent;
+	float ScaledBoundSphereRadius;
 };
 
 struct FClusterOutputData_CPU {
@@ -169,8 +171,8 @@ struct FMobileGPUDrivenSystem {
 	FRWBuffer EntityLodBufferCount_GPU;
 	FRWBuffer IndirectDrawFirstInstanceIndex_GPU;
 	FRWBufferStructured ClusterOutputData_GPU;
-	FRWBufferStructured InstanceToRenderIndexBuffer_GPU;
-	
 
+	FRWBuffer InstanceToRenderIndexBuffer_GPU;
+	//FRWBufferStructured InstanceToRenderIndexBuffer_GPU;
 
 };

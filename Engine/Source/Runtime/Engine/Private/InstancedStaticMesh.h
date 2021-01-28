@@ -730,7 +730,7 @@ public:
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const override;
 
 	//@StarLight code - BEGIN Add rain depth pass, edit by wanghai
-	//virtual void GetDynamicMeshElements_RainDepthPass(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, class FMeshElementCollector& Collector) const override;
+	virtual void GetDynamicMeshElements_RainDepthPass(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, class FMeshElementCollector& Collector) const override;
 	//@StarLight code - END Add rain depth pass, edit by wanghai
 
 	virtual int32 GetNumMeshBatches() const override

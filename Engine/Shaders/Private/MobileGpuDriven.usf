@@ -18,11 +18,11 @@ struct ClusterInputData
     uint ClusterInstanceCountAndLodCount;
     uint InstanceBufferStartIndex;  
     
+    float3 BoundCenter; //Because the Vec3 start address of gles must be aligned to 16 bytes
     float CullDistance; //Aligned to 16 bytes
-    float3 BoundCenter;
     
-    float ScaledBoundSphereRadius;
     float3 BoundExtent;
+    float ScaledBoundSphereRadius;
 };
 
 struct ClusterOutputData
@@ -290,7 +290,8 @@ StructuredBuffer<ClusterOutputData> OutputClusterBufferSRV;
 Buffer<uint> LodCountBufferSRV_0;
 
 //[Output]
-RWStructuredBuffer<uint> InstanceToRenderIndexBufferUAV;
+//RWStructuredBuffer<uint> InstanceToRenderIndexBufferUAV;
+RWBuffer<uint> InstanceToRenderIndexBufferUAV;
 
 [numthreads(GROUP_TILE_SIZE, 1, 1)]
 void MobileUpdateInstanceIndexBuffer(uint DispatchThreadId : SV_DispatchThreadID)
@@ -341,8 +342,8 @@ void MobileIndirectDrawUpdate(uint DispatchThreadId : SV_DispatchThreadID)
         uint2 LodBufferIndexAndLodIndex = IndirectDrawToLodIndexBufferSRV[DispatchThreadId];
     
         uint FirstInstanceIndex = 0;
+        
         LOOP
-
         for (uint i = 1; i <= LodBufferIndexAndLodIndex.y; ++i)
         {
             FirstInstanceIndex += LodCountBufferSRV_1[LodBufferIndexAndLodIndex.x - i];

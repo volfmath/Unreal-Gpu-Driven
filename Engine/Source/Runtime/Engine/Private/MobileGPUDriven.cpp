@@ -3,12 +3,25 @@
 #include "StaticMeshResources.h"
 
 ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
-	TEXT("r.Mobile.GpuDriven"),
+	TEXT("r.GpuDriven"),
 	1,
 	TEXT("Whether to allow gpudriven.\n"),
 	ECVF_Scalability
 );
 
+ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenRenderState(
+	TEXT("r.GpuDriven.RenderState"),
+	1,
+	TEXT("Enable Test the RenderState of GpuDriven"),
+	ECVF_Scalability
+);
+
+ENGINE_API TAutoConsoleVariable<int32> CVarMobileCS(
+	TEXT("r.GpuDriven.ComputeShader"),
+	1,
+	TEXT("Whether to execute cs.\n"),
+	ECVF_Scalability
+);
 
 DEFINE_LOG_CATEGORY(MobileGpuDriven);
 
@@ -424,7 +437,7 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 			for (int32 DrawElementIndex = StartDrawCommandIndex; DrawElementIndex < IndirectDrawCommandBuffer_CPU.Num(); ++DrawElementIndex) {
 				auto& DrawCommandBuffer = IndirectDrawCommandBuffer_CPU[DrawElementIndex];
 				DrawCommandBuffer.IndexCount = ProxyEntity.SectionIndexCount[LocalIndirectDrawIndex];
-				DrawCommandBuffer.InstanceCount = NumRenderCluster;
+				DrawCommandBuffer.InstanceCount = /*NumRenderCluster*/0;
 				DrawCommandBuffer.FirstIndex = ProxyEntity.SectionFirstIndex[LocalIndirectDrawIndex];
 				DrawCommandBuffer.VertexOffset = 0;
 				DrawCommandBuffer.FirstInstance = 0; //DX11 and Mac cannot use offset directly, but it takes effect on IOS
@@ -480,7 +493,10 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 		ClusterOutputData_GPU.Initialize(sizeof(FClusterOutputData_CPU), CurTotalClusterCount, BUF_Static);
 		EntityLodBufferCount_GPU.Initialize(sizeof(uint32), CurTotalLodCount, PF_R32_UINT, BUF_Static); //#TODO: R16
 		IndirectDrawFirstInstanceIndex_GPU.Initialize(sizeof(uint32), CurTotalIndirectDrawCount, PF_R32_UINT, BUF_Static); //#TODO: R16
-		InstanceToRenderIndexBuffer_GPU.Initialize(sizeof(uint32), CurTotalInstanceCount, BUF_Static);
+
+		//#TODO:Temporarily replaced with TexBuffer, in order to pass vulkan
+		InstanceToRenderIndexBuffer_GPU.Initialize(sizeof(uint32), CurTotalInstanceCount, PF_R32_UINT, BUF_Static);
+		//InstanceToRenderIndexBuffer_GPU.Initialize(sizeof(uint32), CurTotalInstanceCount, BUF_Static);
 	}
 
 	//Set Vertex Shader SRV
