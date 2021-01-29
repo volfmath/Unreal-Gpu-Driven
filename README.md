@@ -27,6 +27,7 @@ Optimazation：
 - [x] Dynamic enable and disable
 - [x] Dynamic Cluster Split
 - [ ] Display culling parameters
+- [ ] Support the use of  different Cluster coefficients for each Instance
 
 Test:
 
@@ -40,7 +41,8 @@ Metal：
 Opengl es:
 
 - [x] Support StructureBuffer
+- [ ] Fix the problem that the format does not support RGBA16_SNORM when use LightMap
 
 Vulkan：
 
-- [ ] Fix Unreal?
+- [ ] Unreal performance issues
