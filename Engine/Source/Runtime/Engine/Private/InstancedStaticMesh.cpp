@@ -831,7 +831,7 @@ IMPLEMENT_VERTEX_FACTORY_TYPE_EX(FInstancedStaticMeshVertexFactory,"/Engine/Priv
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 void FInstancedStaticMeshRenderData::InitVertexFactories()
 {
-	if (bUseGpuDriven) {
+	if (bUseGpuDriven || (CVarGpuDrivenMaualFetchTest.GetValueOnAnyThread() != 0)) {
 		for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
 		{
 			ManualFetchVertexFactories.Add(new FManualFetchInstancedStaticMeshVertexFactory(FeatureLevel));
@@ -1267,7 +1267,7 @@ bool FInstancedStaticMeshSceneProxy::UseMobileGPUDriven(UInstancedStaticMeshComp
 		return false;
 	};
 
-	return CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 
+	return CVarMobileEnableGPUDriven.GetValueOnGameThread() != 0 
 		/*&& InFeatureLevel == ERHIFeatureLevel::Type::ES3_1*/ //某些从编辑器拖进Scene的物体FeatureLevel为ES5
 		&& !SupportsDitheredLODTransitions() 
 		&& !SupportVirtualTexture()
@@ -3610,7 +3610,7 @@ void UInstancedStaticMeshComponent::RegisterCompToGpuDrivenSystem() {
 
 
 	//Check Support
-	if (CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 && bUseGpuDrivenForInstance && !bUseGpuDriven) {
+	if (CVarMobileEnableGPUDriven.GetValueOnGameThread() != 0 && bUseGpuDrivenForInstance && !bUseGpuDriven) {
 		if (GetStaticMesh()) {
 			UE_LOG(MobileGpuDriven, Warning, TEXT("%s does not support GpuDriven"), *GetStaticMesh()->GetName());
 		}
@@ -3683,15 +3683,33 @@ void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementSha
 	FRHIUniformBuffer* VertexFactoryUniformBuffer = static_cast<FRHIUniformBuffer*>(BatchElement.VertexFactoryUserData);
 	FLocalVertexFactoryShaderParametersBase::GetElementShaderBindingsBase(Scene, View, Shader, InputStreamType, FeatureLevel, VertexFactory, BatchElement, VertexFactoryUniformBuffer, ShaderBindings, VertexStreams);
 
-	const FGpuDrivenInstancingUserData* InstancingUserData = (const FGpuDrivenInstancingUserData*)BatchElement.UserData;
 	const auto* InstancedVertexFactory = static_cast<const FManualFetchInstancedStaticMeshVertexFactory*>(VertexFactory);
-	const int32 IndirectDrawIndex = BatchElement.UserIndex; //使用UserIndex作为IndirectDrawIndex
-
 	ShaderBindings.Add(Shader->GetUniformBufferParameter<FInstancedStaticMeshVertexFactoryUniformShaderParameters>(), InstancedVertexFactory->GetUniformBuffer());
-	FIntPoint InstanceToRenderStartIndexAndDrawIndexParameter = FIntPoint(InstancingUserData->InstanceToRenderStartIndex, IndirectDrawIndex);
-	ShaderBindings.Add(InstanceToRenderStartIndexAndDrawIndex, InstanceToRenderStartIndexAndDrawIndexParameter);
-	ShaderBindings.Add(InstanceToRenderIndexBufferSRV, InstancingUserData->InstanceToRenderIndexBufferSRV);
-	ShaderBindings.Add(FirstInstanceIndexBufferSRV, InstancingUserData->FirstInstanceIndexBufferSRV);
+
+	const FGpuDrivenInstancingUserData* InstancingUserData = nullptr;
+
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	FGpuDrivenInstancingUserData TempData;
+	if (CVarGpuDrivenMaualFetchTest.GetValueOnRenderThread() != 0) {
+		const int32 InstanceOffsetValue = BatchElement.UserIndex;
+		const FInstancingUserData* RealUserData = (const FInstancingUserData*)BatchElement.UserData;
+		TempData.bRenderSelected = RealUserData->bRenderSelected;
+		TempData.bRenderUnselected = RealUserData->bRenderUnselected;
+		TempData.StartCullDistance = RealUserData->StartCullDistance;
+		TempData.EndCullDistance = RealUserData->EndCullDistance;
+		InstancingUserData = &TempData;
+		//ShaderBindings.Add(InstanceOffset, InstanceOffsetValue);
+	}
+	else 
+#endif
+	{
+		InstancingUserData = (const FGpuDrivenInstancingUserData*)BatchElement.UserData;
+		const int32 IndirectDrawIndex = BatchElement.UserIndex; //使用UserIndex作为IndirectDrawIndex
+		FIntPoint InstanceToRenderStartIndexAndDrawIndexParameter = FIntPoint(InstancingUserData->InstanceToRenderStartIndex, IndirectDrawIndex);
+		ShaderBindings.Add(InstanceToRenderStartIndexAndDrawIndex, InstanceToRenderStartIndexAndDrawIndexParameter);
+		ShaderBindings.Add(InstanceToRenderIndexBufferSRV, InstancingUserData->InstanceToRenderIndexBufferSRV);
+		ShaderBindings.Add(FirstInstanceIndexBufferSRV, InstancingUserData->FirstInstanceIndexBufferSRV);
+	}
 
 	if (InstancingFadeOutParamsParameter.IsBound())
 	{

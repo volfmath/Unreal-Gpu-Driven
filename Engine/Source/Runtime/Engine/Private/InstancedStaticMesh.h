@@ -36,6 +36,7 @@ class ULightComponent;
 struct FMeshEntity;
 struct FMobileGPUDrivenSystem;
 extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven;
+extern ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenMaualFetchTest;
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 extern TAutoConsoleVariable<float> CVarFoliageMinimumScreenSize;
@@ -468,6 +469,9 @@ public:
 		InstanceToRenderStartIndexAndDrawIndex.Bind(ParameterMap, TEXT("InstanceToRenderStartIndexAndDrawIndex"));
 		InstanceToRenderIndexBufferSRV.Bind(ParameterMap, TEXT("InstanceToRenderIndexBufferSRV"));
 		FirstInstanceIndexBufferSRV.Bind(ParameterMap, TEXT("FirstInstanceIndexBufferSRV"));
+
+		//仅用于测试Vertex中Load的性能
+		//InstanceOffset.Bind(ParameterMap, TEXT("InstanceOffset"));
 	}
 
 	void GetElementShaderBindings(
@@ -484,10 +488,13 @@ public:
 
 private:
 	LAYOUT_FIELD(FShaderParameter, InstancingFadeOutParamsParameter)
-	LAYOUT_FIELD(FShaderParameter, InstancingOffsetParameter);
-	LAYOUT_FIELD(FShaderParameter, InstanceToRenderStartIndexAndDrawIndex);
-	LAYOUT_FIELD(FShaderResourceParameter, InstanceToRenderIndexBufferSRV);
-	LAYOUT_FIELD(FShaderResourceParameter, FirstInstanceIndexBufferSRV);
+	LAYOUT_FIELD(FShaderParameter, InstancingOffsetParameter)
+	LAYOUT_FIELD(FShaderParameter, InstanceToRenderStartIndexAndDrawIndex)
+	LAYOUT_FIELD(FShaderResourceParameter, InstanceToRenderIndexBufferSRV)
+	LAYOUT_FIELD(FShaderResourceParameter, FirstInstanceIndexBufferSRV)
+
+	//Only Test
+	//LAYOUT_FIELD(FShaderParameter, InstanceOffset)
 };
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
@@ -556,11 +563,10 @@ public:
 		// unregister SpeedTree wind with the scene
 		if (Scene && StaticMesh && StaticMesh->SpeedTreeWind.IsValid())
 		{
-			if (bUseGpuDriven) {
-				for (int32 LODIndex = 0; LODIndex < ManualFetchVertexFactories.Num(); LODIndex++)
-				{
-					Scene->RemoveSpeedTreeWind_RenderThread(&ManualFetchVertexFactories[LODIndex], StaticMesh);
-				}
+
+			for (int32 LODIndex = 0; LODIndex < ManualFetchVertexFactories.Num(); LODIndex++)
+			{
+				Scene->RemoveSpeedTreeWind_RenderThread(&ManualFetchVertexFactories[LODIndex], StaticMesh);
 			}
 
 			for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
@@ -569,12 +575,15 @@ public:
 			}
 		}
 		
-		if (bUseGpuDriven) {
+		//FInstancedStaticMeshRenderData由非渲染线程创建，但由渲染线程释放
+		//#TODO: ensure
+		if (ManualFetchVertexFactories.Num() > 0) {
 			for (int32 LODIndex = 0; LODIndex < ManualFetchVertexFactories.Num(); LODIndex++)
 			{
 				ManualFetchVertexFactories[LODIndex].ReleaseResource();
 			}
 		}
+
 		for (int32 LODIndex = 0; LODIndex < VertexFactories.Num(); LODIndex++)
 		{
 			VertexFactories[LODIndex].ReleaseResource();
@@ -643,13 +652,7 @@ public:
 	FInstancedStaticMeshSceneProxy(UInstancedStaticMeshComponent* InComponent, ERHIFeatureLevel::Type InFeatureLevel)
 	:	FStaticMeshSceneProxy(InComponent, true)
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-		, bUseGpuDriven
-		(
-			InComponent->GetGpuDrivenIsValid()	
-		#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-			&& CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0 //dynamic switch
-		#endif
-		)
+	,	bUseGpuDriven(InComponent->GetGpuDrivenIsValid())
 	,	UniqueObjectId(0xFFFFFFFF)
 	,	StaticMesh(InComponent->GetStaticMesh())
 	,	InstancedRenderData(InComponent, bUseGpuDriven, InFeatureLevel)

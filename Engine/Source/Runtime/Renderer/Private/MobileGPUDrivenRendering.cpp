@@ -200,7 +200,7 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 
 		GpuDrivenSystem->UpdateAllGPUBuffer();
 
-		//if (CVarGpuDrivenRenderState.GetValueOnAnyThread() != 0) {
+		//if (CVarGpuDrivenRenderState.Get() != 0) {
 		//	return;
 		//}
 
@@ -274,5 +274,5 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 }
 
 bool bUseMobileGpuDriven() {
-	return CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0;
+	return CVarMobileEnableGPUDriven.GetValueOnRenderThread() != 0;
 }

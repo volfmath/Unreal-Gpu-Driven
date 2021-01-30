@@ -128,7 +128,7 @@ static TAutoConsoleVariable<int32> CVarFoliageUseInstanceRuns(
 // @StarLight code - BEGIN GpuDriven Added by yanjianhong
 static TAutoConsoleVariable<int32> CVarGpuDrivenMaxLeafInstance(
 	TEXT("foliage.GpuDrivenLeafInstance"),
-	8,
+	4,
 	TEXT("Control the maximum number of instances of each leaf node"));
 // @StarLight code - END GpuDriven Added by yanjianhong
 
@@ -1601,7 +1601,17 @@ void FHierarchicalStaticMeshSceneProxy::FillDynamicMeshElements(FMeshElementColl
 					}
 					checkSlow(MeshElement.GetNumPrimitives() > 0);
 
-					MeshElement.VertexFactory = &InstancedRenderData.VertexFactories[LODIndex];
+					//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+
+					//Maual Fetch Test
+					if (CVarGpuDrivenMaualFetchTest.GetValueOnRenderThread() != 0) {
+						MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex];
+					}
+					else {
+						MeshElement.VertexFactory = &InstancedRenderData.VertexFactories[LODIndex];
+					}
+					//@StarLight code - END GPU-Driven, Added by yanjianhong
+
 					FMeshBatchElement& BatchElement0 = MeshElement.Elements[0];
 
 					BatchElement0.UserData = ElementParams.PassUserData[SelectionGroupIndex];
@@ -1708,7 +1718,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 	if (bUseGpuDriven && !bHasSelectedInstances
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-		&& CVarMobileEnableGPUDriven.GetValueOnAnyThread() != 0
+		&& CVarMobileEnableGPUDriven.GetValueOnRenderThread() != 0
 #endif
 		) 
 	{
@@ -1719,7 +1729,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 			BuildIndirectDrawBatch(View, ViewFamily, Collector);
 
 //#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-//			if (CVarGpuDrivenRenderState.GetValueOnAnyThread() == 0)
+//			if (CVarGpuDrivenRenderState.Get() == 0)
 //#endif
 			{
 				return;
@@ -3825,20 +3835,20 @@ static void RebuildFoliageForGpuDriven(const TArray<FString>& Args) {
 	UE_LOG(LogConsoleResponse, Display, TEXT("Rebuild Foliage Trees for GpuDriven"));
 #endif
 
-	bool RebuildCluster = false;
+	//bool RebuildCluster = false;
 
-	if (Args.Num() > 0 && Args[0] == TEXT("1")) {
-		RebuildCluster = true;
-	}
+	//if (Args.Num() > 0 && Args[0] == TEXT("1")) {
+	//	RebuildCluster = true;
+	//}
 
 	for (TObjectIterator<UHierarchicalInstancedStaticMeshComponent> It; It; ++It){
 		UHierarchicalInstancedStaticMeshComponent* Comp = *It;
 		if (Comp && !Comp->IsTemplate() && !Comp->IsPendingKill()){			
-			if (RebuildCluster) {
-				Comp->BuildTreeIfOutdated(false, true);
-				Comp->UnRegisterCompToGpuDrivenSystem();
-				Comp->RegisterCompToGpuDrivenSystem();
-			}
+			//if (RebuildCluster) {
+			Comp->BuildTreeIfOutdated(false, true);
+			Comp->UnRegisterCompToGpuDrivenSystem();
+			Comp->RegisterCompToGpuDrivenSystem();
+			//}
 			Comp->MarkRenderStateDirty();
 		}
 	}

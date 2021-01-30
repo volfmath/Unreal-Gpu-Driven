@@ -9,6 +9,7 @@ class UStaticMesh;
 extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven;
 extern ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenRenderState;
 extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileCS;
+extern ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenMaualFetchTest;
 DECLARE_LOG_CATEGORY_EXTERN(MobileGpuDriven, Warning, All);
 
 /**----------------------Gpu Struct Layout----------------------*/

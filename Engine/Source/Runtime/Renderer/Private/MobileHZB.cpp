@@ -250,6 +250,11 @@ void FMobileHzbSystem::MobileComputeBuildHZB(FRHICommandListImmediate& RHICmdLis
 
 void FMobileSceneRenderer::MobileBuildHzb(FRHICommandListImmediate& RHICmdList) {
 	//Hiz generator
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	if (CVarMobileBuildHZB.GetValueOnAnyThread() == 0) {
+		return;
+	}
+#endif
 	RHICmdList.SetCurrentStat(GET_STATID(STAT_CLMM_HZBOcclusionGenerator));
 	FMobileHzbSystem::MobileRasterBuildHZB(RHICmdList, Views[0]);
 	//FMobileHzbSystem::MobileComputeBuildHZB(RHICmdList, Views[0]);

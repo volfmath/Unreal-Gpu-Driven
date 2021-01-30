@@ -16,6 +16,13 @@ ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenRenderState(
 	ECVF_Scalability
 );
 
+ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenMaualFetchTest(
+	TEXT("r.GpuDriven.MaualFetch"),
+	0,
+	TEXT("Enable MaualFetch performerce"),
+	ECVF_Scalability
+);
+
 ENGINE_API TAutoConsoleVariable<int32> CVarMobileCS(
 	TEXT("r.GpuDriven.ComputeShader"),
 	1,
