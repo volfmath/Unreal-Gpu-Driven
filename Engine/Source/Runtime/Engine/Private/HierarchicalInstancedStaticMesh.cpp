@@ -128,7 +128,7 @@ static TAutoConsoleVariable<int32> CVarFoliageUseInstanceRuns(
 // @StarLight code - BEGIN GpuDriven Added by yanjianhong
 static TAutoConsoleVariable<int32> CVarGpuDrivenMaxLeafInstance(
 	TEXT("foliage.GpuDrivenLeafInstance"),
-	4,
+	1024,
 	TEXT("Control the maximum number of instances of each leaf node"));
 // @StarLight code - END GpuDriven Added by yanjianhong
 
@@ -1602,7 +1602,6 @@ void FHierarchicalStaticMeshSceneProxy::FillDynamicMeshElements(FMeshElementColl
 					checkSlow(MeshElement.GetNumPrimitives() > 0);
 
 					//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-
 					//Maual Fetch Test
 					if (CVarGpuDrivenMaualFetchTest.GetValueOnRenderThread() != 0) {
 						MeshElement.VertexFactory = &InstancedRenderData.ManualFetchVertexFactories[LODIndex];
@@ -1716,6 +1715,14 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 	SCOPE_CYCLE_COUNTER(STAT_HISMCGetDynamicMeshElement);
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	if (CVarIndirectDrawTest.GetValueOnRenderThread() != 0) {
+		FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(Views, ViewFamily, VisibilityMap, Collector);
+		return;
+	}
+#endif
+
 	if (bUseGpuDriven && !bHasSelectedInstances
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 		&& CVarMobileEnableGPUDriven.GetValueOnRenderThread() != 0
@@ -1724,7 +1731,6 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 	{
 		check(Views.Num() == 1);
 		const FSceneView* View = Views[0];
-
 		if (ClusterTree.Num() && View->GetDynamicMeshElementsShadowCullFrustum() == nullptr) {
 			BuildIndirectDrawBatch(View, ViewFamily, Collector);
 
@@ -1733,8 +1739,7 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 //#endif
 			{
 				return;
-			}
-			
+			}	
 		}
 	}
 	//@StarLight code - END GPU-Driven, Added by yanjianhong

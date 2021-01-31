@@ -30,6 +30,13 @@ ENGINE_API TAutoConsoleVariable<int32> CVarMobileCS(
 	ECVF_Scalability
 );
 
+ENGINE_API TAutoConsoleVariable<int32> CVarIndirectDrawTest(
+	TEXT("r.GpuDriven.IndirectDrawTest"),
+	0,
+	TEXT("Whether to execute IndirectDraw.\n"),
+	ECVF_Scalability
+);
+
 DEFINE_LOG_CATEGORY(MobileGpuDriven);
 
 //--------------------------------Static Function--------------------------------

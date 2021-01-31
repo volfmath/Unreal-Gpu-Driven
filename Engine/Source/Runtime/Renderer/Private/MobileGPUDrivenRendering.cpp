@@ -193,6 +193,10 @@ IMPLEMENT_SHADER_TYPE(, FMobileUpdateDrawBufferCS, TEXT("/Engine/Private/MobileG
 
 void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList) {
 
+	if (CVarMobileCS.GetValueOnRenderThread() == 0) {
+		return;
+	}
+
 	SCOPED_DRAW_EVENT(RHICmdList, MobileGPUDrivenCulling);
 
 	FMobileGPUDrivenSystem* GpuDrivenSystem = FMobileGPUDrivenSystem::GetGPUDrivenSystem_RenderThreadByWorldId(Scene->GetWorld()->GetUniqueID());
@@ -205,7 +209,7 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 		//}
 
 		//Clear Pass
-		if(CVarMobileCS.GetValueOnAnyThread() == 1 || CVarMobileCS.GetValueOnAnyThread() == 2)
+		if(CVarMobileCS.GetValueOnRenderThread() == 1 || CVarMobileCS.GetValueOnRenderThread() == 2)
 		{
 			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
 			const uint32 ThreadGroups = FMath::DivideAndRoundUp(GpuDrivenSystem->CurTotalLodCount, ThreadCount);
@@ -217,7 +221,7 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 		}
 
 		//Culling Pass
-		if (CVarMobileCS.GetValueOnAnyThread() == 1 || CVarMobileCS.GetValueOnAnyThread() == 2)
+		if (CVarMobileCS.GetValueOnRenderThread() == 1 || CVarMobileCS.GetValueOnRenderThread() == 2)
 		{
 			FTextureRHIRef MobileHZBTexture = FMobileHzbSystem::MobileHzbResourcesPtr->MobileHZBTexture->GetRenderTargetItem().ShaderResourceTexture;
 
@@ -234,7 +238,7 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 		}
 
 		//ReMapInstanceBuffer Pass
-		if (CVarMobileCS.GetValueOnAnyThread() == 1 || CVarMobileCS.GetValueOnAnyThread() == 3)
+		if (CVarMobileCS.GetValueOnRenderThread() == 1 || CVarMobileCS.GetValueOnRenderThread() == 3)
 		{
 			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->ClusterOutputData_GPU.UAV);
 			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
@@ -249,7 +253,7 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 		}
 
 		//Update IndirectDraw Buffer
-		if (CVarMobileCS.GetValueOnAnyThread() == 1 || CVarMobileCS.GetValueOnAnyThread() == 4)
+		if (CVarMobileCS.GetValueOnRenderThread() == 1 || CVarMobileCS.GetValueOnRenderThread() == 4)
 		{
 			RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, GpuDrivenSystem->EntityLodBufferCount_GPU.UAV);
 			RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EResourceTransitionPipeline::EGfxToCompute, GpuDrivenSystem->IndirectDrawCommandBuffer_GPU.UAV);
