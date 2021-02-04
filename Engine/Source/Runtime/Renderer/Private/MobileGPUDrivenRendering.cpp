@@ -204,9 +204,9 @@ void FMobileSceneRenderer::MobileGPUCulling(FRHICommandListImmediate& RHICmdList
 
 		GpuDrivenSystem->UpdateAllGPUBuffer();
 
-		//if (CVarGpuDrivenRenderState.Get() != 0) {
-		//	return;
-		//}
+		if (CVarGpuDrivenRenderState.GetValueOnRenderThread() != 0) {
+			return;
+		}
 
 		//Clear Pass
 		if(CVarMobileCS.GetValueOnRenderThread() == 1 || CVarMobileCS.GetValueOnRenderThread() == 2)

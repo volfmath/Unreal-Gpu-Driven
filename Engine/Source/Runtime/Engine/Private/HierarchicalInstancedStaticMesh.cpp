@@ -128,7 +128,7 @@ static TAutoConsoleVariable<int32> CVarFoliageUseInstanceRuns(
 // @StarLight code - BEGIN GpuDriven Added by yanjianhong
 static TAutoConsoleVariable<int32> CVarGpuDrivenMaxLeafInstance(
 	TEXT("foliage.GpuDrivenLeafInstance"),
-	1024,
+	4,
 	TEXT("Control the maximum number of instances of each leaf node"));
 // @StarLight code - END GpuDriven Added by yanjianhong
 
@@ -166,6 +166,10 @@ DECLARE_DWORD_COUNTER_STAT(TEXT("Instances"), STAT_FoliageInstances, STATGROUP_F
 DECLARE_DWORD_COUNTER_STAT(TEXT("Occlusion Culled Instances"), STAT_OcclusionCulledFoliageInstances, STATGROUP_Foliage);
 DECLARE_DWORD_COUNTER_STAT(TEXT("Traversals"),STAT_FoliageTraversals,STATGROUP_Foliage);
 DECLARE_MEMORY_STAT(TEXT("Instance Buffers"),STAT_FoliageInstanceBuffers,STATGROUP_Foliage);
+
+// @StarLight code - GpuDriven Added by yanjianhong
+DECLARE_DWORD_COUNTER_STAT(TEXT("IndirectDraw Count"), STAT_INDIRECTDRAWCOUNT, STATGROUP_Foliage);
+// @StarLight code - GpuDriven Added by yanjianhong
 
 static void FoliageCVarSinkFunction()
 {
@@ -1716,12 +1720,12 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 
 	//@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 
-#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-	if (CVarIndirectDrawTest.GetValueOnRenderThread() != 0) {
-		FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(Views, ViewFamily, VisibilityMap, Collector);
-		return;
-	}
-#endif
+//#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+//	if (CVarIndirectDrawTest.GetValueOnRenderThread() != 0) {
+//		FInstancedStaticMeshSceneProxy::GetDynamicMeshElements(Views, ViewFamily, VisibilityMap, Collector);
+//		return;
+//	}
+//#endif
 
 	if (bUseGpuDriven && !bHasSelectedInstances
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -1734,9 +1738,9 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 		if (ClusterTree.Num() && View->GetDynamicMeshElementsShadowCullFrustum() == nullptr) {
 			BuildIndirectDrawBatch(View, ViewFamily, Collector);
 
-//#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-//			if (CVarGpuDrivenRenderState.Get() == 0)
-//#endif
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+			if (CVarGpuDrivenRenderState.GetValueOnRenderThread() == 0)
+#endif
 			{
 				return;
 			}	
@@ -1931,6 +1935,9 @@ void FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements(const TArray<cons
 					if (NumVerts)
 					{
 						InstanceParams.MinInstancesToSplit[LODIndex] = MinVertsToSplitNode / NumVerts;
+						//@StarLight code - GPU-Driven, Added by yanjianhong
+						//InstanceParams.MinInstancesToSplit[LODIndex] = FMath::Clamp(MinVertsToSplitNode / NumVerts, 1, CVarGpuDrivenMaxLeafInstance.GetValueOnAnyThread());
+						//@StarLight code - GPU-Driven, Added by yanjianhong
 					}
 				}
 
@@ -2201,6 +2208,8 @@ void FHierarchicalStaticMeshSceneProxy::BuildIndirectDrawBatch(const FSceneView*
 
 				SetupIndirectDrawMeshBatch(LODIndex, SectionIndex, MeshElement, StartIndirectDrawIndex, CurrentSystem);
 				Collector.AddMesh(0, MeshElement);
+
+				INC_DWORD_STAT_BY(STAT_INDIRECTDRAWCOUNT, 1);
 			}
 		}
 	}

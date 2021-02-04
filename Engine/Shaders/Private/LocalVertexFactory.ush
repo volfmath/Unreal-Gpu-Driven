@@ -37,19 +37,33 @@
 
 float4 InstancingOffset;
 float4 InstancingFadeOutParams;
+
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
-	#if MOBILE_INSTANCE_MANUALFETCH
-		uint2 InstanceToRenderStartIndexAndDrawIndex;
-		////#TODO:Temporarily replaced with TexBuffer, in order to pass vulkan
-		//StructuredBuffer<uint> InstanceToRenderIndexBufferSRV;
-		Buffer<uint> InstanceToRenderIndexBufferSRV;
-		Buffer<uint> FirstInstanceIndexBufferSRV;
-		uint GetRenderIndex(uint InstanceId)
-		{
-			uint RemapInstanceIndex = InstanceToRenderStartIndexAndDrawIndex.x + InstanceId + FirstInstanceIndexBufferSRV[InstanceToRenderStartIndexAndDrawIndex.y];
-			return InstanceToRenderIndexBufferSRV[RemapInstanceIndex];
-		}
-	#endif
+#if MOBILE_INSTANCE_MANUALFETCH
+
+	uint2 InstanceToRenderStartIndexAndDrawIndex;
+	////#TODO:Temporarily replaced with TexBuffer, in order to pass vulkan
+	//StructuredBuffer<uint> InstanceToRenderIndexBufferSRV;
+	Buffer<uint> InstanceToRenderIndexBufferSRV;
+	Buffer<uint> FirstInstanceIndexBufferSRV;
+
+	float4 GetMobileLightAndShadowMapUVScale(uint4 LightMapBuffer)
+	{
+		//Opt instruction
+		float4 RcpValue = float4(1.f / 32767.5f, 1.f / 32767.5f, 1.f / 32767.5f, 1.f / 32767.5f);
+		float4 HalfRcpValue = float4(0.5f / 32767.5f, 0.5f / 32767.5f, 0.5f / 32767.5f, 0.5f / 32767.5f);
+		return LightMapBuffer * RcpValue + HalfRcpValue;
+		
+		//float4 Value_1 = (LightMapBuffer + float4(0.5f, 0.5f, 0.5f, 0.5f)) / 32767.5f;
+	}
+
+	uint GetRenderIndex(uint InstanceId)
+	{
+		//return InstanceId;
+		uint RemapInstanceIndex = InstanceToRenderStartIndexAndDrawIndex.x + InstanceId + FirstInstanceIndexBufferSRV[InstanceToRenderStartIndexAndDrawIndex.y];
+		return InstanceToRenderIndexBufferSRV[RemapInstanceIndex];
+	}
+#endif
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 #endif	// USE_INSTANCING
 
@@ -374,11 +388,21 @@ float4x4 GetInstanceTransform(FPositionOnlyVertexFactoryInput Input)
 	#elif MOBILE_INSTANCE_MANUALFETCH	
 		uint InstanceId = GetInstanceId(Input.InstanceId);
 		InstanceId = GetRenderIndex(InstanceId);
-		return float4x4(
-			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
-			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
-			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2].xyz, 0.0f),
-			float4(InstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId].xyz, 1.0f));
+
+		#if OPENGL_PROFILE
+			return float4x4(
+				float4(MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
+				float4(MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
+				float4(MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2].xyz, 0.0f),
+				float4(MobileInstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId].xyz, 1.0f));
+		#else
+			return float4x4(
+				float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
+				float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
+				float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2].xyz, 0.0f),
+				float4(InstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId].xyz, 1.0f));
+		#endif
+
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	#else
@@ -390,7 +414,7 @@ float4x4 GetInstanceTransform(FPositionOnlyVertexFactoryInput Input)
 	#endif
 }
 
-float4x4 GetInstanceTransform(FPositionAndNormalOnlyVertexFactoryInput Input)
+float4x4 GetInstanceTransform(FPositionAndNormalOnlyVertexFactoryInput Input) 
 {
 	#if MANUAL_VERTEX_FETCH && !USE_INSTANCING_BONEMAP
 	uint InstanceId = GetInstanceId(Input.InstanceId);
@@ -411,11 +435,19 @@ float4x4 GetInstanceTransform(FPositionAndNormalOnlyVertexFactoryInput Input)
 	#elif MOBILE_INSTANCE_MANUALFETCH
 		uint InstanceId = GetInstanceId(Input.InstanceId);
 		InstanceId = GetRenderIndex(InstanceId);
-		return float4x4(
-			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
-			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
-			float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2].xyz, 0.0f),
-			float4(InstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId].xyz, 1.0f));
+		#if OPENGL_PROFILE
+			return float4x4(
+				float4(MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
+				float4(MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
+				float4(MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2].xyz, 0.0f),
+				float4(MobileInstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId].xyz, 1.0f));
+		#else
+			return float4x4(
+				float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0].xyz, 0.0f),
+				float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1].xyz, 0.0f),
+				float4(InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2].xyz, 0.0f),
+				float4(InstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId].xyz, 1.0f));
+		#endif
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 	#else
@@ -836,11 +868,19 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 #elif MOBILE_INSTANCE_MANUALFETCH
 	uint InstanceId = GetInstanceId(Input.InstanceId);
 	InstanceId = GetRenderIndex(InstanceId);
-	Intermediates.InstanceTransform1 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0];
-	Intermediates.InstanceTransform2 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1];
-	Intermediates.InstanceTransform3 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2];
-	Intermediates.InstanceOrigin = InstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId];
-	Intermediates.InstanceLightmapAndShadowMapUVBias = InstanceVF.VertexFetch_InstanceLightmapBuffer[InstanceId];
+	#if OPENGL_PROFILE
+		Intermediates.InstanceTransform1 = MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0];
+		Intermediates.InstanceTransform2 = MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1];
+		Intermediates.InstanceTransform3 = MobileInstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2];
+		Intermediates.InstanceOrigin = MobileInstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId];
+		Intermediates.InstanceLightmapAndShadowMapUVBias = GetMobileLightAndShadowMapUVScale(MobileInstanceVF.VertexFetch_InstanceLightmapBuffer[InstanceId]);
+	#else
+		Intermediates.InstanceTransform1 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 0];
+		Intermediates.InstanceTransform2 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 1];
+		Intermediates.InstanceTransform3 = InstanceVF.VertexFetch_InstanceTransformBuffer[3 * InstanceId + 2];
+		Intermediates.InstanceOrigin = InstanceVF.VertexFetch_InstanceOriginBuffer[InstanceId];
+		Intermediates.InstanceLightmapAndShadowMapUVBias = InstanceVF.VertexFetch_InstanceLightmapBuffer[InstanceId];
+	#endif
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 	
 #elif USE_INSTANCING

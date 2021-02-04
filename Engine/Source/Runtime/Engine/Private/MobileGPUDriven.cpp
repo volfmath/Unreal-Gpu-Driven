@@ -11,7 +11,7 @@ ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven(
 
 ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenRenderState(
 	TEXT("r.GpuDriven.RenderState"),
-	1,
+	0,
 	TEXT("Enable Test the RenderState of GpuDriven"),
 	ECVF_Scalability
 );
@@ -37,7 +37,18 @@ ENGINE_API TAutoConsoleVariable<int32> CVarIndirectDrawTest(
 	ECVF_Scalability
 );
 
+ENGINE_API TAutoConsoleVariable<int32> CVarUseTexture2D(
+	TEXT("r.GpuDriven.UseTex2D"),
+	1,
+	TEXT("Whether to Use Texture for OpenGLES.\n"),
+	ECVF_Scalability
+);
+
 DEFINE_LOG_CATEGORY(MobileGpuDriven);
+
+//static bool TestFlag = true;
+//FRWBufferStructured FMobileGPUDrivenSystem::ClusterInputData_GPU = FRWBufferStructured();
+//FRWBufferStructured FMobileGPUDrivenSystem::ClusterOutputData_GPU = FRWBufferStructured();
 
 //--------------------------------Static Function--------------------------------
 TMap<uint32, FMobileGPUDrivenSystem*> FMobileGPUDrivenSystem::WorldIndexToSystemMap_GameThread; //逻辑线程只负责创建
@@ -340,13 +351,13 @@ FMobileGPUDrivenSystem::FMobileGPUDrivenSystem()
 }
 
 FMobileGPUDrivenSystem::~FMobileGPUDrivenSystem() {
-	EntityLodScreenBuffer_GPU.Release();
-	IndirectDrawToLodIndexBuffer_GPU.Release();
 	ClusterInputData_GPU.Release();
+	ClusterOutputData_GPU.Release();
+	EntityLodScreenBuffer_GPU.Release();
+	IndirectDrawToLodIndexBuffer_GPU.Release();	
 	IndirectDrawCommandBuffer_GPU.Release();
 	EntityLodBufferCount_GPU.Release();
 	IndirectDrawFirstInstanceIndex_GPU.Release();
-	ClusterOutputData_GPU.Release();
 	InstanceToRenderIndexBuffer_GPU.Release();
 }
 
@@ -364,13 +375,13 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 
 	//Resources Release
 	{
+		ClusterInputData_GPU.Release();
+		ClusterOutputData_GPU.Release();
 		EntityLodScreenBuffer_GPU.Release();
 		IndirectDrawToLodIndexBuffer_GPU.Release();
-		ClusterInputData_GPU.Release();
 		IndirectDrawCommandBuffer_GPU.Release();
 		EntityLodBufferCount_GPU.Release();
-		IndirectDrawFirstInstanceIndex_GPU.Release();
-		ClusterOutputData_GPU.Release();
+		IndirectDrawFirstInstanceIndex_GPU.Release();	
 		InstanceToRenderIndexBuffer_GPU.Release();
 	}
 
@@ -484,10 +495,13 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 	//Write data to GPU
 	if(Entities.Num() != 0)
 	{
+
 		ClusterInputData_GPU.Initialize(sizeof(FClusterInputData_CPU), ClusterData_CPU.Num(), BUF_Static);
 		void* MappingAndBoundData = RHILockStructuredBuffer(ClusterInputData_GPU.Buffer, 0, ClusterInputData_GPU.NumBytes, RLM_WriteOnly);
 		FMemory::Memcpy(MappingAndBoundData, ClusterData_CPU.GetData(), ClusterInputData_GPU.NumBytes);
 		RHIUnlockStructuredBuffer(ClusterInputData_GPU.Buffer);
+
+		ClusterOutputData_GPU.Initialize(sizeof(FClusterOutputData_CPU), CurTotalClusterCount, BUF_Static);
 
 		EntityLodScreenBuffer_GPU.Initialize(sizeof(float), EntityLodScreenBuffer_CPU.Num(), PF_R32_FLOAT, BUF_Static); //#TODO: PF_R16_FLOAT
 		void* LodBufferData = RHILockVertexBuffer(EntityLodScreenBuffer_GPU.Buffer, 0, EntityLodScreenBuffer_GPU.NumBytes, RLM_WriteOnly);
@@ -503,8 +517,7 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 		void* IndirectDrawToLodIndexBufferData = RHILockVertexBuffer(IndirectDrawToLodIndexBuffer_GPU.Buffer, 0, IndirectDrawToLodIndexBuffer_GPU.NumBytes, RLM_WriteOnly);
 		FMemory::Memcpy(IndirectDrawToLodIndexBufferData, IndirectDrawToLodIndexBuffer_CPU.GetData(), IndirectDrawToLodIndexBuffer_GPU.NumBytes);
 		RHIUnlockVertexBuffer(IndirectDrawToLodIndexBuffer_GPU.Buffer);
-
-		ClusterOutputData_GPU.Initialize(sizeof(FClusterOutputData_CPU), CurTotalClusterCount, BUF_Static);
+		
 		EntityLodBufferCount_GPU.Initialize(sizeof(uint32), CurTotalLodCount, PF_R32_UINT, BUF_Static); //#TODO: R16
 		IndirectDrawFirstInstanceIndex_GPU.Initialize(sizeof(uint32), CurTotalIndirectDrawCount, PF_R32_UINT, BUF_Static); //#TODO: R16
 
@@ -518,6 +531,10 @@ void FMobileGPUDrivenSystem::UpdateAllGPUBuffer() {
 		ProxyEntity.GpuDriven_UserData.FirstInstanceIndexBufferSRV = IndirectDrawFirstInstanceIndex_GPU.SRV.GetReference();
 		ProxyEntity.GpuDriven_UserData.InstanceToRenderIndexBufferSRV = InstanceToRenderIndexBuffer_GPU.SRV.GetReference();
 	}
+
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	UE_LOG(LogConsoleResponse, Display, TEXT("Entity Count: %d, Draw Count: %d, Lod Count: %d, Cluster Count: %d"), Entities.Num(), CurTotalIndirectDrawCount, CurTotalLodCount, CurTotalClusterCount);
+#endif
 }
 
 const FMeshEntity& FMobileGPUDrivenSystem::GetMeshEntityByUniqueId(uint32 UniqueObjectIndex) const {

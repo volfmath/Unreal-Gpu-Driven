@@ -37,6 +37,15 @@ struct FMeshEntity;
 struct FMobileGPUDrivenSystem;
 extern ENGINE_API TAutoConsoleVariable<int32> CVarMobileEnableGPUDriven;
 extern ENGINE_API TAutoConsoleVariable<int32> CVarGpuDrivenMaualFetchTest;
+
+BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FMobileInstancedStaticMeshVertexFactoryUniformShaderParameters, ENGINE_API)
+	SHADER_PARAMETER_SRV(Buffer<float4>, VertexFetch_InstanceOriginBuffer)
+	SHADER_PARAMETER_SRV(Buffer<float4>, VertexFetch_InstanceTransformBuffer)
+	SHADER_PARAMETER_SRV(Buffer<uint4>, VertexFetch_InstanceLightmapBuffer)
+	SHADER_PARAMETER_SRV(Buffer<float>, InstanceCustomDataBuffer)
+	SHADER_PARAMETER(int32, NumCustomDataFloats)
+END_GLOBAL_SHADER_PARAMETER_STRUCT()
+
 //@StarLight code - END GPU-Driven, Added by yanjianhong
 
 extern TAutoConsoleVariable<float> CVarFoliageMinimumScreenSize;
@@ -51,6 +60,7 @@ BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FInstancedStaticMeshVertexFactoryUniformSha
 	SHADER_PARAMETER_SRV(Buffer<float>, InstanceCustomDataBuffer)
 	SHADER_PARAMETER(int32, NumCustomDataFloats)
 END_GLOBAL_SHADER_PARAMETER_STRUCT()
+
 
 // This must match the maximum a user could specify in the material (see 
 // FHLSLMaterialTranslator::TextureCoordinate), otherwise the material will attempt 
@@ -138,6 +148,9 @@ private:
 	{
 		virtual FString GetFriendlyName() const override { return TEXT("FInstanceOriginBuffer"); }
 	} InstanceOriginBuffer;
+	//@StarLight code - GPU-Driven, Added by yanjianhong
+	FTexture2DRHIRef InstanceOriginTextureBuffer;
+	//@StarLight code - GPU-Driven, Added by yanjianhong
 	FShaderResourceViewRHIRef InstanceOriginSRV;
 
 	class FInstanceTransformBuffer : public FVertexBuffer
@@ -152,6 +165,12 @@ private:
 	} InstanceLightmapBuffer;
 	FShaderResourceViewRHIRef InstanceLightmapSRV;
 
+	//@StarLight code - GPU-Driven, Added by yanjianhong
+	//TexBuffer of OpenGL ES does not support RGBA16_SNORM format
+	FTexture2DRHIRef InstanceLightMapTextureBuffer;
+	/*FShaderResourceViewRHIRef MobileInstanceLightmapSRV;*/
+	//@StarLight code - GPU-Driven, Added by yanjianhong
+
 	class FInstanceCustomDataBuffer : public FVertexBuffer
 	{
 		virtual FString GetFriendlyName() const override { return TEXT("FInstanceCustomDataBuffer"); }
@@ -160,6 +179,10 @@ private:
 
 	/** Delete existing resources */
 	void CleanUp();
+
+	//@StarLight code - GPU-Driven, Added by yanjianhong
+	void CreateTexture2DBuffer(FResourceArrayInterface* InResourceArray, uint32 InUsage, uint32 PerElementSize, uint8 InFormat, FTexture2DRHIRef& OutVertexBufferRHI, FShaderResourceViewRHIRef& OutInstanceSRV);
+	//@StarLight code - GPU-Driven, Added by yanjianhong
 
 	void CreateVertexBuffer(FResourceArrayInterface* InResourceArray, uint32 InUsage, uint32 InStride, uint8 InFormat, FVertexBufferRHIRef& OutVertexBufferRHI, FShaderResourceViewRHIRef& OutInstanceSRV);
 	
@@ -446,15 +469,29 @@ public:
 		return Data.InstanceCustomDataSRV;
 	}
 
-	FRHIUniformBuffer* GetUniformBuffer() const
-	{
-		return UniformBuffer.GetReference();
+	inline FRHIUniformBuffer* GetUniformBuffer() const {
+		return UniformBuffer;
 	}
 
-private:
-	FDataType Data;
+	bool bUseTexture;
+	bool bIsOpenGLPlatform;
 
-	TUniformBufferRef<FInstancedStaticMeshVertexFactoryUniformShaderParameters> UniformBuffer;
+	template<bool bUseTexture, bool bIsOpenGLPlatform>
+	struct UniformBufferTpye {
+		using UniformType = FInstancedStaticMeshVertexFactoryUniformShaderParameters;
+	};
+
+	template<bool bUseTexture>
+	struct UniformBufferTpye<bUseTexture, true> {
+		using UniformType = FMobileInstancedStaticMeshVertexFactoryUniformShaderParameters;
+	};
+
+private:
+	FRHIUniformBuffer* UniformBuffer;
+	TUniformBufferRef<UniformBufferTpye<false, true>::UniformType> GL_UniformBuffer;
+	TUniformBufferRef<UniformBufferTpye<false, false>::UniformType> NoGL_UniformBuffer;
+
+	FDataType Data;
 };
 
 class FManualFetchInstancedStaticMeshVertexFactoryShaderParameters : public FLocalVertexFactoryShaderParametersBase
@@ -576,8 +613,8 @@ public:
 		}
 		
 		//FInstancedStaticMeshRenderData由非渲染线程创建，但由渲染线程释放
-		//#TODO: ensure
 		if (ManualFetchVertexFactories.Num() > 0) {
+			check(bUseGpuDriven);
 			for (int32 LODIndex = 0; LODIndex < ManualFetchVertexFactories.Num(); LODIndex++)
 			{
 				ManualFetchVertexFactories[LODIndex].ReleaseResource();

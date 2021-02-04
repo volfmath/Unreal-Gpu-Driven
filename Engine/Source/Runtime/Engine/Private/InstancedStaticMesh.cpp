@@ -60,7 +60,12 @@ const int32 InstancedStaticMeshMaxTexCoord = 8;
 
 IMPLEMENT_HIT_PROXY(HInstancedStaticMeshInstance, HHitProxy);
 
+//@StarLight code - GPU-Driven, Added by yanjianhong
+IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FMobileInstancedStaticMeshVertexFactoryUniformShaderParameters, "MobileInstanceVF");
+//@StarLight code - GPU-Driven, Added by yanjianhong
+
 IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FInstancedStaticMeshVertexFactoryUniformShaderParameters, "InstanceVF");
+
 
 TAutoConsoleVariable<int32> CVarMinLOD(
 	TEXT("foliage.MinLOD"),
@@ -391,6 +396,14 @@ void FStaticMeshInstanceBuffer::InitRHI()
 		SCOPED_LOADTIMER(FStaticMeshInstanceBuffer_InitRHI);
 
 		LLM_SCOPE(ELLMTag::InstancedMesh);
+
+		//@StarLight code - GPU-Driven, Added by yanjianhong
+		//#TODO:动态切换需要双倍显存消耗,Runtime增加标记
+		//if (IsOpenGLPlatform(GMaxRHIShaderPlatform) && CVarMobileEnableGPUDriven.GetValueOnRenderThread() != 0){
+		//	CreateTexture2DBuffer(InstanceData->GetLightMapResourceArray(), TexCreate_ShaderResource, 8, PF_R16G16B16A16_SNORM, InstanceLightMapTextureBuffer, InstanceLightMapTextureSRV);
+		//}
+		//@StarLight code - GPU-Driven, Added by yanjianhong
+
 		auto AccessFlags = BUF_Static;
 		CreateVertexBuffer(InstanceData->GetOriginResourceArray(), AccessFlags | BUF_ShaderResource, 16, PF_A32B32G32R32F, InstanceOriginBuffer.VertexBufferRHI, InstanceOriginSRV);
 		CreateVertexBuffer(InstanceData->GetTransformResourceArray(), AccessFlags | BUF_ShaderResource, InstanceData->GetTranslationUsesHalfs() ? 8 : 16, InstanceData->GetTranslationUsesHalfs() ? PF_FloatRGBA : PF_A32B32G32R32F, InstanceTransformBuffer.VertexBufferRHI, InstanceTransformSRV);
@@ -412,6 +425,10 @@ void FStaticMeshInstanceBuffer::ReleaseRHI()
 	InstanceTransformSRV.SafeRelease();
 	InstanceLightmapSRV.SafeRelease();
 	InstanceCustomDataSRV.SafeRelease();
+
+	//@StarLight code - GPU-Driven, Added by yanjianhong
+
+	//@StarLight code - GPU-Driven, Added by yanjianhong
 
 	InstanceOriginBuffer.ReleaseRHI();
 	InstanceTransformBuffer.ReleaseRHI();
@@ -524,38 +541,48 @@ void FStaticMeshInstanceBuffer::BindInstanceVertexBuffer(const class FVertexFact
 }
 
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
+
+void FStaticMeshInstanceBuffer::CreateTexture2DBuffer(FResourceArrayInterface* InResourceArray, uint32 InUsage, uint32 PerElementSize, uint8 InFormat, FTexture2DRHIRef& OutVertexBufferRHI, FShaderResourceViewRHIRef& OutInstanceSRV) {
+	check(InResourceArray);
+	check(InResourceArray->GetResourceDataSize() > 0);
+
+	uint16 SizeX = FMath::Min((int32)MAX_uint16, (int32)GMaxTextureDimensions);
+	uint16 BytesPerLine = SizeX * PerElementSize;
+	uint32 ResourcesByteSize = InstanceData->GetLightMapResourceArray()->GetResourceDataSize();
+	uint32 NumLines = (ResourcesByteSize + BytesPerLine - 1) / BytesPerLine;
+	FRHIResourceCreateInfo CreateInfo;
+
+	OutVertexBufferRHI = RHICreateTexture2D(SizeX, NumLines, InFormat, 1, 1, InUsage, CreateInfo);
+	OutInstanceSRV = RHICreateShaderResourceView(InstanceLightMapTextureBuffer, 0);
+
+	//Write Data
+	uint32 Stride;
+	void* TextureBuffer = RHILockTexture2D(InstanceLightMapTextureBuffer, 0, RLM_WriteOnly, Stride, false);
+	FMemory::Memcpy(TextureBuffer, InstanceData->GetLightMapResourceArray()->GetResourceData(), ResourcesByteSize);
+	RHIUnlockTexture2D(InstanceLightMapTextureBuffer, 0, false);
+}
+
 void FStaticMeshInstanceBuffer::BindManualFetchVertexBuffer(const class FVertexFactory* VertexFactory, struct FManualFetchInstancedStaticMeshDataType& InstancedStaticMeshData) const{
 
 	if (InstanceData->GetNumInstances()){
-		if (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform)) {
-			check(InstanceOriginSRV);
-			check(InstanceTransformSRV);
-			check(InstanceLightmapSRV);
-			check(InstanceCustomDataSRV); // Should not be nullptr, but can be assigned a dummy buffer
 
-			InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
-			InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
-			InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
+		EShaderPlatform CurrentPlatform = GShaderPlatformForFeatureLevel[ERHIFeatureLevel::Type::ES3_1];
+
+		const_cast<FShaderResourceViewRHIRef&>(InstanceOriginSRV) = RHICreateShaderResourceView(InstanceOriginBuffer.VertexBufferRHI, 16, PF_A32B32G32R32F);
+		const_cast<FShaderResourceViewRHIRef&>(InstanceTransformSRV) = RHICreateShaderResourceView(InstanceTransformBuffer.VertexBufferRHI, InstanceData->GetTranslationUsesHalfs() ? 8 : 16, InstanceData->GetTranslationUsesHalfs() ? PF_FloatRGBA : PF_A32B32G32R32F);	
+		const_cast<FShaderResourceViewRHIRef&>(InstanceLightmapSRV) = RHICreateShaderResourceView(InstanceLightmapBuffer.VertexBufferRHI, 8, IsOpenGLPlatform(CurrentPlatform) ? PF_R16G16B16A16_SINT : PF_R16G16B16A16_SNORM);
+		
+		InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
+		InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
+		InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
+		if (InstanceData->GetNumCustomDataFloats() > 0) {
+			const_cast<FShaderResourceViewRHIRef&>(InstanceCustomDataSRV) = RHICreateShaderResourceView(InstanceCustomDataBuffer.VertexBufferRHI, 4, PF_R32_FLOAT);
 			InstancedStaticMeshData.InstanceCustomDataSRV = InstanceCustomDataSRV;
-			InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
 		}
 		else {
-			//因为FStaticMeshInstanceBuffer没有标记表示是否使用GPUDriven
-			const_cast<FShaderResourceViewRHIRef&>(InstanceOriginSRV) = RHICreateShaderResourceView(InstanceOriginBuffer.VertexBufferRHI, 16, PF_A32B32G32R32F);
-			const_cast<FShaderResourceViewRHIRef&>(InstanceTransformSRV) = RHICreateShaderResourceView(InstanceTransformBuffer.VertexBufferRHI, InstanceData->GetTranslationUsesHalfs() ? 8 : 16, InstanceData->GetTranslationUsesHalfs() ? PF_FloatRGBA : PF_A32B32G32R32F);
-			const_cast<FShaderResourceViewRHIRef&>(InstanceLightmapSRV) = RHICreateShaderResourceView(InstanceLightmapBuffer.VertexBufferRHI, 8, PF_R16G16B16A16_SNORM);
-			InstancedStaticMeshData.InstanceOriginSRV = InstanceOriginSRV;
-			InstancedStaticMeshData.InstanceTransformSRV = InstanceTransformSRV;
-			InstancedStaticMeshData.InstanceLightmapSRV = InstanceLightmapSRV;
-			if (InstanceData->GetNumCustomDataFloats() > 0) {
-				const_cast<FShaderResourceViewRHIRef&>(InstanceCustomDataSRV) = RHICreateShaderResourceView(InstanceCustomDataBuffer.VertexBufferRHI, 4, PF_R32_FLOAT);
-				InstancedStaticMeshData.InstanceCustomDataSRV = InstanceCustomDataSRV;
-			}
-			else {
-				InstancedStaticMeshData.InstanceCustomDataSRV = GDummyFloatBuffer.ShaderResourceViewRHI;
-			}
-			InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
+			InstancedStaticMeshData.InstanceCustomDataSRV = GDummyFloatBuffer.ShaderResourceViewRHI;
 		}
+		InstancedStaticMeshData.NumCustomDataFloats = InstanceData->GetNumCustomDataFloats();
 	}
 }
 //@StarLight code - END GPU-Driven, Added by yanjianhong
@@ -831,6 +858,7 @@ IMPLEMENT_VERTEX_FACTORY_TYPE_EX(FInstancedStaticMeshVertexFactory,"/Engine/Priv
 //@StarLight code - BEGIN GPU-Driven, Added by yanjianhong
 void FInstancedStaticMeshRenderData::InitVertexFactories()
 {
+	//#TODO: 目前双倍消耗,因为需要动态切换
 	if (bUseGpuDriven || (CVarGpuDrivenMaualFetchTest.GetValueOnAnyThread() != 0)) {
 		for (int32 LODIndex = 0; LODIndex < LODModels.Num(); LODIndex++)
 		{
@@ -3684,8 +3712,15 @@ void FManualFetchInstancedStaticMeshVertexFactoryShaderParameters::GetElementSha
 	FLocalVertexFactoryShaderParametersBase::GetElementShaderBindingsBase(Scene, View, Shader, InputStreamType, FeatureLevel, VertexFactory, BatchElement, VertexFactoryUniformBuffer, ShaderBindings, VertexStreams);
 
 	const auto* InstancedVertexFactory = static_cast<const FManualFetchInstancedStaticMeshVertexFactory*>(VertexFactory);
-	ShaderBindings.Add(Shader->GetUniformBufferParameter<FInstancedStaticMeshVertexFactoryUniformShaderParameters>(), InstancedVertexFactory->GetUniformBuffer());
 
+	if (InstancedVertexFactory->bIsOpenGLPlatform) {
+		using BindUniformType = FManualFetchInstancedStaticMeshVertexFactory::UniformBufferTpye<false, true>::UniformType;
+		ShaderBindings.Add(Shader->GetUniformBufferParameter<BindUniformType>(), InstancedVertexFactory->GetUniformBuffer());
+	}
+	else {
+		using BindUniformType = FManualFetchInstancedStaticMeshVertexFactory::UniformBufferTpye<false, false>::UniformType;
+		ShaderBindings.Add(Shader->GetUniformBufferParameter<BindUniformType>(), InstancedVertexFactory->GetUniformBuffer());
+	}
 	const FGpuDrivenInstancingUserData* InstancingUserData = nullptr;
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -3773,7 +3808,6 @@ void FManualFetchInstancedStaticMeshVertexFactory::ModifyCompilationEnvironment(
 	OutEnvironment.SetDefine(TEXT("MANUAL_VERTEX_FETCH"), TEXT("0"));
 	OutEnvironment.SetDefine(TEXT("MOBILE_INSTANCE_MANUALFETCH"), TEXT("1"));
 	//}
-
 	OutEnvironment.SetDefine(TEXT("USE_INSTANCING"), TEXT("1"));
 	// Does not support Dithered
 	OutEnvironment.SetDefine(TEXT("USE_DITHERED_LOD_TRANSITION_FOR_INSTANCED"), 0);
@@ -3903,13 +3937,29 @@ void FManualFetchInstancedStaticMeshVertexFactory::InitRHI()
 	InitDeclaration(Elements);
 
 	{
-		FInstancedStaticMeshVertexFactoryUniformShaderParameters UniformParameters;
-		UniformParameters.VertexFetch_InstanceOriginBuffer = GetInstanceOriginSRV();
-		UniformParameters.VertexFetch_InstanceTransformBuffer = GetInstanceTransformSRV();
-		UniformParameters.VertexFetch_InstanceLightmapBuffer = GetInstanceLightmapSRV();
-		UniformParameters.InstanceCustomDataBuffer = GetInstanceCustomDataSRV();
-		UniformParameters.NumCustomDataFloats = Data.NumCustomDataFloats;
-		UniformBuffer = TUniformBufferRef<FInstancedStaticMeshVertexFactoryUniformShaderParameters>::CreateUniformBufferImmediate(UniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
+		EShaderPlatform CurrentPlatform = GShaderPlatformForFeatureLevel[ERHIFeatureLevel::Type::ES3_1];
+		bIsOpenGLPlatform = IsOpenGLPlatform(CurrentPlatform);
+		bUseTexture = false;
+		if (bIsOpenGLPlatform) {
+			UniformBufferTpye<false, true>::UniformType MobileUniformParameters;
+			MobileUniformParameters.VertexFetch_InstanceOriginBuffer = GetInstanceOriginSRV();
+			MobileUniformParameters.VertexFetch_InstanceTransformBuffer = GetInstanceTransformSRV();
+			MobileUniformParameters.VertexFetch_InstanceLightmapBuffer = GetInstanceLightmapSRV();
+			MobileUniformParameters.InstanceCustomDataBuffer = GetInstanceCustomDataSRV();
+			MobileUniformParameters.NumCustomDataFloats = Data.NumCustomDataFloats;
+			GL_UniformBuffer = TUniformBufferRef<UniformBufferTpye<false, true>::UniformType>::CreateUniformBufferImmediate(MobileUniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
+			UniformBuffer = GL_UniformBuffer.GetReference();
+		}
+		else {
+			UniformBufferTpye<false, false>::UniformType UniformParameters;
+			UniformParameters.VertexFetch_InstanceOriginBuffer = GetInstanceOriginSRV();
+			UniformParameters.VertexFetch_InstanceTransformBuffer = GetInstanceTransformSRV();
+			UniformParameters.VertexFetch_InstanceLightmapBuffer = GetInstanceLightmapSRV();
+			UniformParameters.InstanceCustomDataBuffer = GetInstanceCustomDataSRV();
+			UniformParameters.NumCustomDataFloats = Data.NumCustomDataFloats;
+			NoGL_UniformBuffer = TUniformBufferRef<UniformBufferTpye<false, false>::UniformType>::CreateUniformBufferImmediate(UniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
+			UniformBuffer = NoGL_UniformBuffer.GetReference();
+		}
 	}
 }
 
